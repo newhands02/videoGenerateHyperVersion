@@ -1,0 +1,22 @@
+{
+  "name": "webframes",
+  "version": "0.1.3",
+  "private": true,
+  "description": "仿照 HyperFrames 逻辑的 Web 端视频脚本编排工具",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:frontend": "pnpm --filter @webframes/frontend dev",
+    "dev:backend": "pnpm --filter @webframes/backend dev",
+    "build": "pnpm -r run build",
+    "build:frontend": "pnpm --filter @webframes/frontend build",
+    "build:backend": "pnpm --filter @webframes/backend build",
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "pnpm -r exec rm -rf dist node_modules .vite *.tsbuildinfo",
+    "lint": "pnpm -r run lint"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
