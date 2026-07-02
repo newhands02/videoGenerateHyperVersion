@@ -1,0 +1,2 @@
+# videoGenerateHyperVersion
+仿照HyperFrames逻辑搭建的视频生成网页
