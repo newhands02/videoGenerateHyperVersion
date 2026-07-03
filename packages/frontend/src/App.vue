@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h } from 'vue';
 import { useRoute } from 'vue-router';
-import { NLayout, NLayoutHeader, NLayoutSider, NLayoutContent, NMenu, NIcon, NSpace, NText } from 'naive-ui';
+import { NConfigProvider, NMessageProvider, NDialogProvider, NNotificationProvider, NLayout, NLayoutHeader, NLayoutSider, NLayoutContent, NMenu, NIcon, NSpace, NText } from 'naive-ui';
 import type { MenuOption } from 'naive-ui';
 
 const route = useRoute();
@@ -18,32 +18,40 @@ const activeKey = computed(() => (route.name as string) ?? 'home');
 </script>
 
 <template>
-  <NLayout style="height: 100vh" has-sider>
-    <NLayoutSider
-      bordered
-      :width="220"
-      :native-scrollbar="false"
-      content-style="padding: 12px;"
-    >
-      <div class="logo">
-        <span class="logo-mark">W</span>
-        <span class="logo-text">WebFrames</span>
-      </div>
-      <NMenu :value="activeKey" :options="menuOptions" :indent="18" />
-    </NLayoutSider>
-    <NLayout>
-      <NLayoutHeader bordered class="topbar">
-        <NSpace align="center" :wrap="false">
-          <NText depth="3">v0.1.3 · Phase A</NText>
-          <span style="flex: 1" />
-          <NText depth="3" :code="true">{{ activeKey }}</NText>
-        </NSpace>
-      </NLayoutHeader>
-      <NLayoutContent class="content">
-        <RouterView />
-      </NLayoutContent>
-    </NLayout>
-  </NLayout>
+  <NConfigProvider>
+    <NMessageProvider>
+      <NDialogProvider>
+        <NNotificationProvider>
+          <NLayout style="height: 100vh" has-sider>
+            <NLayoutSider
+              bordered
+              :width="220"
+              :native-scrollbar="false"
+              content-style="padding: 12px;"
+            >
+              <div class="logo">
+                <span class="logo-mark">W</span>
+                <span class="logo-text">WebFrames</span>
+              </div>
+              <NMenu :value="activeKey" :options="menuOptions" :indent="18" />
+            </NLayoutSider>
+            <NLayout>
+              <NLayoutHeader bordered class="topbar">
+                <NSpace align="center" :wrap="false">
+                  <NText depth="3">v0.1.3 · Phase A</NText>
+                  <span style="flex: 1" />
+                  <NText depth="3" :code="true">{{ activeKey }}</NText>
+                </NSpace>
+              </NLayoutHeader>
+              <NLayoutContent class="content">
+                <RouterView />
+              </NLayoutContent>
+            </NLayout>
+          </NLayout>
+        </NNotificationProvider>
+      </NDialogProvider>
+    </NMessageProvider>
+  </NConfigProvider>
 </template>
 
 <style scoped>
