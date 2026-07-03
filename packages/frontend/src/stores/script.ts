@@ -1,6 +1,7 @@
 /**
- * 文案输入 + 分段 store（Phase B）
+ * 文案输入 + 分段 + TTS store（Phase B + C）
  * 支持三模式分段：手动 / AI / AI+人工协同
+ * 支持 TTS 试听：调用后端 /api/tts，播放音频，回填 actualDuration
  */
 import { defineStore } from 'pinia';
 import { ref, computed, reactive } from 'vue';
@@ -12,8 +13,10 @@ import type {
   TTSEngine,
   TtsSpeed,
   TtsStyle,
+  TtsRequest,
 } from '@webframes/shared-types';
 import { useProjectStore } from './project';
+import { synthTts } from '../api/tts';
 
 /** 分段模式 */
 export type SplitMode = 'manual' | 'ai' | 'collab';
@@ -83,18 +86,25 @@ export const useScriptStore = defineStore('script', () => {
   // -------- 当前编辑中的分段 --------
   const activeSegmentId = ref<string | null>(null);
 
+  // -------- TTS 状态 --------
+  /** 正在合成的段 ID 集合 */
+  const synthesizingIds = ref<Set<string>>(new Set());
+  /** 正在播放的段 ID */
+  const playingId = ref<string | null>(null);
+  /** TTS 错误信息（段 ID → 错误信息） */
+  const ttsErrors = ref<Map<string, string>>(new Map());
+
   // ============ Action ============
 
   /** 设置原始文案（支持 Markdown 转纯文本） */
   function setRawText(text: string) {
-    // 去掉 Markdown 语法，保留纯文本
     const plain = text
-      .replace(/^#{1,6}\s+/gm, '')   // 标题
-      .replace(/\*\*(.+?)\*\*/g, '$1') // 加粗
-      .replace(/\*(.+?)\*/g, '$1')     // 斜体
-      .replace(/`(.+?)`/g, '$1')       // 行内代码
-      .replace(/\[(.+?)\]\(.+?\)/g, '$1') // 链接
-      .replace(/\n{2,}/g, '\n\n')       // 多余空行
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/\*(.+?)\*/g, '$1')
+      .replace(/`(.+?)`/g, '$1')
+      .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+      .replace(/\n{2,}/g, '\n\n')
       .trim();
     rawText.value = plain;
   }
@@ -106,7 +116,6 @@ export const useScriptStore = defineStore('script', () => {
     segments.value = lines.map((text, i) =>
       createSegment(text, { index: i, source: 'manual' }),
     );
-    // 清空 AI 状态
     clearAiState();
   }
 
@@ -136,6 +145,7 @@ export const useScriptStore = defineStore('script', () => {
     segments.value = segments.value.filter(s => s.id !== id);
     reindex();
     if (activeSegmentId.value === id) activeSegmentId.value = null;
+    if (playingId.value === id) stopPlayback();
   }
 
   /** 上移段 */
@@ -158,19 +168,19 @@ export const useScriptStore = defineStore('script', () => {
     }
   }
 
-  /** 合并两段（将 target 合并到 source，删除 target） */
+  /** 合并两段 */
   function mergeSegments(sourceId: string, targetId: string) {
     const source = segments.value.find(s => s.id === sourceId);
     const target = segments.value.find(s => s.id === targetId);
     if (source && target && source.id !== target.id) {
       source.text = source.text + ' ' + target.text;
-      source.source = 'manual'; // 合并后视为手动
+      source.source = 'manual';
       segments.value = segments.value.filter(s => s.id !== targetId);
       reindex();
     }
   }
 
-  /** 在光标位置拆分段（按回车触发） */
+  /** 在光标位置拆分段 */
   function splitSegment(id: string, cursorPos: number) {
     const seg = segments.value.find(s => s.id === id);
     if (!seg) return;
@@ -192,9 +202,16 @@ export const useScriptStore = defineStore('script', () => {
     segments.value.forEach((s, i) => s.index = i);
   }
 
+  /** 更新段的 TTS 配置 */
+  function updateSegmentTts(id: string, tts: Partial<ScriptSegment['tts']>) {
+    const seg = segments.value.find(s => s.id === id);
+    if (seg) {
+      Object.assign(seg.tts, tts);
+    }
+  }
+
   // -------- AI 分段 --------
 
-  /** 设置 AI 提议（来自 DeepSeek 返回） */
   function setAiProposals(proposals: AISegmentProposal[]) {
     aiProposals.value = proposals;
     adoptedIndexes.value = new Set();
@@ -202,7 +219,6 @@ export const useScriptStore = defineStore('script', () => {
     aiError.value = '';
   }
 
-  /** 采纳单条 AI 提议 */
   function adoptProposal(proposalIdx: number) {
     if (adoptedIndexes.value.has(proposalIdx)) return;
     adoptedIndexes.value.add(proposalIdx);
@@ -213,21 +229,17 @@ export const useScriptStore = defineStore('script', () => {
       confidence: p.confidence,
       source: 'ai',
     });
-    // 插入到合适位置（按采纳顺序）
     const insertAt = adoptedIndexes.value.size - 1;
     segments.value.splice(insertAt, 0, seg);
     reindex();
   }
 
-  /** 采纳所有 AI 提议 */
   function adoptAllProposals() {
     aiProposals.value.forEach((_, idx) => adoptProposal(idx));
   }
 
-  /** 拒绝单条 AI 提议 */
   function rejectProposal(proposalIdx: number) {
     adoptedIndexes.value.delete(proposalIdx);
-    // 如果该 proposal 已加入 segments，需要移除
     const p = aiProposals.value[proposalIdx];
     if (!p) return;
     const segIdx = segments.value.findIndex(
@@ -239,15 +251,12 @@ export const useScriptStore = defineStore('script', () => {
     }
   }
 
-  /** 拒绝所有 AI 提议（回到手动模式） */
   function rejectAllProposals() {
-    // 移除所有 source=ai 的段
     segments.value = segments.value.filter(s => s.source !== 'ai');
     adoptedIndexes.value = new Set();
     reindex();
   }
 
-  /** 清空 AI 状态 */
   function clearAiState() {
     aiStatus.value = 'idle';
     aiError.value = '';
@@ -255,10 +264,93 @@ export const useScriptStore = defineStore('script', () => {
     adoptedIndexes.value = new Set();
   }
 
-  /** 恢复原文（segments 清空，回到 rawText） */
   function restoreOriginal() {
     segments.value = [];
     clearAiState();
+  }
+
+  // -------- TTS 合成 --------
+
+  /**
+   * 对单段调用 TTS
+   * 后端返回 audioUrl（data URL），前端存为 blob URL 填入 segment.audioUrl
+   * 同时用 AudioContext 测量真实时长回填 segment.audioDuration
+   */
+  async function synthesizeSegment(segmentId: string): Promise<void> {
+    const seg = segments.value.find(s => s.id === segmentId);
+    if (!seg || !seg.text.trim()) {
+      ttsErrors.value.set(segmentId, '段文案为空');
+      return;
+    }
+
+    synthesizingIds.value = new Set([...synthesizingIds.value, segmentId]);
+    ttsErrors.value.delete(segmentId);
+
+    try {
+      const req: TtsRequest = {
+        text: seg.text,
+        voiceId: seg.tts.voiceId,
+        engine: seg.tts.engine,
+        speed: seg.tts.speed,
+      };
+      // apiPost 成功时直接返回 TtsResponse，失败时 throw
+      const data = await synthTts(req);
+
+      // 将 data URL 转为 blob URL 存储
+      const blob = await (await fetch(data.audioUrl)).blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      seg.audioUrl = blobUrl;
+      // 如果后端返回了时长就用，否则从 blob 测量
+      if (data.duration > 0) {
+        seg.audioDuration = data.duration;
+      } else {
+        measureDuration(blobUrl).then(d => { seg.audioDuration = d; });
+      }
+    } catch (err: any) {
+      ttsErrors.value.set(segmentId, err.message || 'TTS 合成失败');
+    } finally {
+      const next = new Set(synthesizingIds.value);
+      next.delete(segmentId);
+      synthesizingIds.value = next;
+    }
+  }
+
+  /** 测量音频真实时长 */
+  function measureDuration(blobUrl: string): Promise<number> {
+    return new Promise((resolve) => {
+      const audio = new Audio();
+      audio.addEventListener('loadedmetadata', () => {
+        resolve(Math.round(audio.duration * 100) / 100);
+      });
+      audio.addEventListener('error', () => resolve(0));
+      audio.src = blobUrl;
+    });
+  }
+
+  /** 对所有段批量 TTS */
+  async function synthesizeAll(): Promise<void> {
+    const tasks = segments.value.map(s => synthesizeSegment(s.id));
+    await Promise.all(tasks);
+  }
+
+  /** 播放段音频 */
+  function playSegment(segmentId: string): void {
+    const seg = segments.value.find(s => s.id === segmentId);
+    if (!seg?.audioUrl) return;
+    stopPlayback();
+    const audio = new Audio(seg.audioUrl);
+    audio.play();
+    playingId.value = segmentId;
+    audio.addEventListener('ended', () => {
+      if (playingId.value === segmentId) playingId.value = null;
+    });
+  }
+
+  /** 停止播放 */
+  function stopPlayback(): void {
+    // Audio 元素无法直接停止，但我们可以让 GC 回收
+    playingId.value = null;
   }
 
   // -------- 同步到 project store --------
@@ -268,18 +360,15 @@ export const useScriptStore = defineStore('script', () => {
     project.updateSegments(segments.value);
   }
 
-  /** 设置分段模式 */
   function setSplitMode(mode: SplitMode) {
     splitMode.value = mode;
   }
 
-  /** 设置 AI 加载状态 */
   function setAiLoading() {
     aiStatus.value = 'loading';
     aiError.value = '';
   }
 
-  /** 设置 AI 错误 */
   function setAiError(msg: string) {
     aiStatus.value = 'error';
     aiError.value = msg;
@@ -299,6 +388,9 @@ export const useScriptStore = defineStore('script', () => {
     aiProposals,
     adoptedIndexes,
     activeSegmentId,
+    synthesizingIds,
+    playingId,
+    ttsErrors,
     // actions
     setRawText,
     splitByNewline,
@@ -310,6 +402,7 @@ export const useScriptStore = defineStore('script', () => {
     mergeSegments,
     splitSegment,
     reindex,
+    updateSegmentTts,
     setAiProposals,
     adoptProposal,
     adoptAllProposals,
@@ -317,6 +410,10 @@ export const useScriptStore = defineStore('script', () => {
     rejectAllProposals,
     clearAiState,
     restoreOriginal,
+    synthesizeSegment,
+    synthesizeAll,
+    playSegment,
+    stopPlayback,
     setSplitMode,
     setAiLoading,
     setAiError,

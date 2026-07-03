@@ -251,6 +251,12 @@ export interface TtsRequest {
   voiceId: string;
   /** 可选覆盖引擎（不传则用 voiceId 对应引擎） */
   engine?: TTSEngine;
+  /** 音色类型（后端分发用） */
+  voiceType?: 'preset' | 'design' | 'clone';
+  /** 音色描述（design 类型必传） */
+  voiceDescription?: string;
+  /** 样本音频 Base64（clone 类型必传，格式 data:audio/mpeg;base64,...） */
+  voiceSampleBase64?: string;
   speed?: TtsSpeed;
   style?: TtsStyle;
   rate?: number;
