@@ -210,6 +210,9 @@ export interface VoiceSample {
   blob: Blob;
 }
 
+/** 分段模式（Step 2 三模式） */
+export type SplitMode = 'manual' | 'ai' | 'collab';
+
 // ==================== AI 协同分段 ====================
 
 /**

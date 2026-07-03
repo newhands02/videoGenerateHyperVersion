@@ -3,7 +3,7 @@
  */
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { Project, Resolution, TTSEngine } from '@webframes/shared-types';
+import type { Project, Resolution, TTSEngine, ScriptSegment } from '@webframes/shared-types';
 
 function newProject(): Project {
   const now = new Date().toISOString();
@@ -51,6 +51,16 @@ export const useProjectStore = defineStore('project', () => {
     project.value.updatedAt = new Date().toISOString();
   }
 
+  /** 同步分段列表（从 script store 调用） */
+  function updateSegments(segs: ScriptSegment[]) {
+    project.value.segments = segs;
+    project.value.meta.totalDuration = segs.reduce(
+      (sum, s) => sum + (s.audioDuration ?? Math.ceil(s.text.length / 3.8)),
+      0,
+    );
+    touch();
+  }
+
   return {
     project,
     segmentCount,
@@ -58,6 +68,7 @@ export const useProjectStore = defineStore('project', () => {
     setName,
     setResolution,
     setTtsEngine,
+    updateSegments,
     touch,
   };
 });
