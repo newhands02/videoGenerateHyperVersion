@@ -32,7 +32,7 @@ function uid(): string {
 /** 创建默认 TTS 配置 */
 function defaultTts(engine: TTSEngine = 'mimo'): ScriptSegment['tts'] {
   return {
-    voiceId: engine === 'mimo' ? 'mimo-preset-冰糖' : 'edge-zh-CN-XiaoxiaoNeural',
+    voiceId: engine === 'mimo' ? 'mimo-冰糖' : 'edge-Xiaoxiao',
     engine,
     speed: 'normal' as TtsSpeed,
     style: 'neutral' as TtsStyle,
@@ -297,6 +297,7 @@ export const useScriptStore = defineStore('script', () => {
         voiceId: seg.tts.voiceId,
         engine: seg.tts.engine,
         speed: seg.tts.speed,
+        voiceType: 'preset', // 默认预置，下方按实际类型覆盖
       };
 
       // 按音色类型补充字段

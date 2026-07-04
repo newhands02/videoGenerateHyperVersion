@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type { ApiResponse, TtsResponse, TTSEngine } from '@webframes/shared-types';
 import { env } from '../config/env.js';
+import { findNativeVoiceId } from '../config/voices.js';
 
 /**
  * POST /api/tts
@@ -82,17 +83,24 @@ async function handleMimo(
   let model: string;
   let messages: Array<{ role: string; content: string }>;
   let voice: string | undefined;
+  let optimizeTextPreview = false;
 
   if (voiceType === 'design') {
-    // 音色设计：用 mimo-v2.5-tts-voicedesign，voice 由 user 消息描述
+    // 音色设计：用 mimo-v2.5-tts-voicedesign
+    // - user 消息 = 音色描述（必填）
+    // - assistant 消息 = 要合成的文本
+    // - 不传 audio.voice，改用 optimize_text_preview
     model = 'mimo-v2.5-tts-voicedesign';
     messages = [
       { role: 'user', content: voiceDescription || '自然清亮的女声' },
       { role: 'assistant', content: text },
     ];
-    voice = undefined; // 不需要 voice 字段
+    voice = undefined;
+    optimizeTextPreview = true;
   } else if (voiceType === 'clone') {
-    // 音色复刻：用 mimo-v2.5-tts-voiceclone，voice 字段传样本音频的 Base64
+    // 音色复刻：用 mimo-v2.5-tts-voiceclone
+    // - audio.voice = 样本音频的 Base64 data URI
+    // - user 消息可选，传空字符串即可
     model = 'mimo-v2.5-tts-voiceclone';
     messages = [
       { role: 'user', content: speedHint },
@@ -101,12 +109,23 @@ async function handleMimo(
     voice = voiceSampleBase64; // "data:audio/mpeg;base64,..."
   } else {
     // 预置音色：用 mimo-v2.5-tts
+    // - audio.voice = 预置音色的 nativeId（如 "冰糖"），不是内部 ID（如 "mimo-冰糖"）
+    // - user 消息可选，仅在需要语速控制时传入
     model = 'mimo-v2.5-tts';
-    messages = [
-      { role: 'user', content: speedHint },
-      { role: 'assistant', content: text },
-    ];
-    voice = voiceId;
+    // 查找 nativeId：voiceId 可能是 "mimo-冰糖"，需要映射为 "冰糖"
+    const nativeId = findNativeVoiceId(voiceId) ?? voiceId;
+    voice = nativeId;
+    // 仅在 speedHint 非空时才加 user 消息，避免空内容导致 Param Incorrect
+    if (speedHint) {
+      messages = [
+        { role: 'user', content: speedHint },
+        { role: 'assistant', content: text },
+      ];
+    } else {
+      messages = [
+        { role: 'assistant', content: text },
+      ];
+    }
   }
 
   try {
@@ -117,6 +136,9 @@ async function handleMimo(
     };
     if (voice !== undefined) {
       body.audio.voice = voice;
+    }
+    if (optimizeTextPreview) {
+      body.audio.optimize_text_preview = true;
     }
 
     const httpRes = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
@@ -189,6 +211,9 @@ async function handleEdge(
 ) {
   const { text, voiceId, speed } = params;
 
+  // 查找 nativeId：voiceId 可能是 "edge-Xiaoxiao"，需要映射为 "zh-CN-XiaoxiaoNeural"
+  const nativeVoiceId = findNativeVoiceId(voiceId) ?? voiceId;
+
   // 用 Node.js 子进程调用 Python edge-tts CLI
   // edge-tts --text "..." --voice zh-CN-XiaoxiaoNeural --write-media - 2>/dev/null
   const { execFile } = await import('child_process');
@@ -205,7 +230,7 @@ async function handleEdge(
   return new Promise<void>((resolve) => {
     execFile(
       'edge-tts',
-      ['--text', text, '--voice', voiceId, '--rate', rate, '--write-media', tmpFile],
+      ['--text', text, '--voice', nativeVoiceId, '--rate', rate, '--write-media', tmpFile],
       { timeout: 30_000 },
       (err, _stdout, stderr) => {
         if (err) {

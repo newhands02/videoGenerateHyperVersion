@@ -9,9 +9,11 @@ import {
   NDivider, useMessage,
 } from 'naive-ui';
 import { exportProject, downloadBlob } from '../lib/exporter';
+import { useVoicesStore } from '../stores/voices';
 
 const script = useScriptStore();
 const project = useProjectStore();
+const voices = useVoicesStore();
 const router = useRouter();
 const message = useMessage();
 
@@ -134,7 +136,7 @@ async function handleExport() {
     const proj = project.project;
     const segs = script.segments;
 
-    const result = await exportProject(proj, segs);
+    const result = await exportProject(proj, segs, voices.entries);
     downloadBlob(result.blob, result.filename);
     exportResult.value = { filename: result.filename, fileCount: result.fileCount };
     message.success(`已下载 ${result.filename}`);

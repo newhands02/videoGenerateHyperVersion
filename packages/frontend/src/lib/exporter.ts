@@ -15,7 +15,7 @@
  * - README.md           使用说明
  */
 
-import type { ScriptSegment, Project } from '@webframes/shared-types';
+import type { ScriptSegment, Project, VoiceEntry } from '@webframes/shared-types';
 
 // ==================== JSZip 动态加载 ====================
 
@@ -205,10 +205,28 @@ function generateHyperframesJson(project: Project, segments: ScriptSegment[]): s
 }
 
 /** 生成 webframes.config.json */
-function generateWebframesConfig(project: Project, segments: ScriptSegment[]): string {
+function generateWebframesConfig(project: Project, segments: ScriptSegment[], voicesData?: VoiceEntry[]): string {
+  const voiceMap = new Map<string, VoiceEntry>();
+  if (voicesData) {
+    for (const v of voicesData) voiceMap.set(v.id, v);
+  }
+
   const voices = segments.reduce((map, seg) => {
     if (seg.tts.voiceId && !map[seg.tts.voiceId]) {
-      map[seg.tts.voiceId] = { id: seg.tts.voiceId, engine: seg.tts.engine ?? project.ttsEngine };
+      const v = voiceMap.get(seg.tts.voiceId);
+      const entry: Record<string, any> = {
+        id: seg.tts.voiceId,
+        engine: seg.tts.engine ?? project.ttsEngine,
+        type: v?.kind ?? 'preset',
+      };
+      if (v?.kind === 'preset') {
+        entry.nativeVoiceId = v.nativeId;
+      } else if (v?.kind === 'design') {
+        entry.description = v.promptText;
+      } else if (v?.kind === 'clone') {
+        entry.sampleAudioId = v.sampleAudioId;
+      }
+      map[seg.tts.voiceId] = entry;
     }
     return map;
   }, {} as Record<string, any>);
@@ -340,25 +358,38 @@ def tts_mimo(segs, output_file, timed=False):
             model = "mimo-v2.5-tts-voicedesign"
             user_msg = voice.get("description", "自然清亮的女声")
             voice_param = None
+            optimize_preview = True
         elif voice_type == "clone":
             model = "mimo-v2.5-tts-voiceclone"
             user_msg = speed_hint
             voice_param = voice.get("sampleBase64", "")
+            optimize_preview = False
         else:
             model = "mimo-v2.5-tts"
-            user_msg = speed_hint
-            voice_param = voice.get("voiceId", "冰糖")
+            # 使用 nativeVoiceId（如 "冰糖"），而非内部 ID（如 "mimo-冰糖"）
+            voice_param = voice.get("nativeVoiceId", voice.get("voiceId", "mimo_default"))
+            optimize_preview = False
+            # 仅在 speedHint 非空时才加 user 消息
+            if speed_hint:
+                user_msg = speed_hint
+            else:
+                user_msg = None
+        
+        # 构建 messages
+        msgs = []
+        if user_msg is not None:
+            msgs.append({"role": "user", "content": user_msg})
+        msgs.append({"role": "assistant", "content": s["text"]})
         
         kwargs = {
             "model": model,
-            "messages": [
-                {"role": "user", "content": user_msg},
-                {"role": "assistant", "content": s["text"]},
-            ],
+            "messages": msgs,
             "audio": {"format": "wav"},
         }
         if voice_param:
             kwargs["audio"]["voice"] = voice_param
+        if optimize_preview:
+            kwargs["audio"]["optimize_text_preview"] = True
         
         resp = client.chat.completions.create(**kwargs)
         wav_b64 = resp.choices[0].message.audio.data
@@ -674,6 +705,7 @@ export interface ExportResult {
 export async function exportProject(
   project: Project,
   segments: ScriptSegment[],
+  voicesData?: VoiceEntry[],
 ): Promise<ExportResult> {
   const JSZip = await loadJSZip();
   const zip = new JSZip();
@@ -681,7 +713,7 @@ export async function exportProject(
   // 生成所有文件
   zip.file('index.html', generateIndexHtml(project, segments));
   zip.file('hyperframes.json', generateHyperframesJson(project, segments));
-  zip.file('webframes.config.json', generateWebframesConfig(project, segments));
+  zip.file('webframes.config.json', generateWebframesConfig(project, segments, voicesData));
   zip.file('script.txt', generateScriptTxt(segments));
   zip.file('timeline.json', generateTimelineJson(segments));
   zip.file('tts.py', generateTtsPy());
