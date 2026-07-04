@@ -1,29 +1,38 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onUnmounted } from 'vue';
 import { useScriptStore } from '../stores/script';
+import { useProjectStore } from '../stores/project';
 import { useRouter } from 'vue-router';
-import { NButton, NTag, NText, NSlider } from 'naive-ui';
+import {
+  NButton, NTag, NText, NSlider, NModal, NCard,
+  NSpace, NList, NListItem, NThing, NAlert, NSpin,
+  NDivider, useMessage,
+} from 'naive-ui';
+import { exportProject, downloadBlob } from '../lib/exporter';
 
 const script = useScriptStore();
+const project = useProjectStore();
 const router = useRouter();
+const message = useMessage();
+
+// -------- 导出状态 --------
+const showExportDialog = ref(false);
+const exporting = ref(false);
+const exportResult = ref<{ filename: string; fileCount: number } | null>(null);
 
 // -------- 时间轴状态 --------
-const timelineWidth = 800; // px
-const pxPerSecond = ref(4); // 缩放比例
+const pxPerSecond = ref(4);
 const totalDuration = computed(() => script.totalDuration);
 const scaledWidth = computed(() => totalDuration.value * pxPerSecond.value + 120);
 
-// 播放头
 const playheadSec = ref(0);
 const isPlaying = ref(false);
 let playTimer: number | null = null;
 
-// 拖拽状态
 const draggingSegId = ref<string | null>(null);
 const dragStartX = ref(0);
 const dragOrigStart = ref(0);
 
-/** 计算段在时间轴上的位置和宽度 */
 function segStyle(seg: { index: number; audioDuration?: number }) {
   const start = script.segments
     .slice(0, seg.index)
@@ -33,21 +42,19 @@ function segStyle(seg: { index: number; audioDuration?: number }) {
   return { left, width, start };
 }
 
-/** 格式化秒为 MM:SS */
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.round(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/** 刻度线 */
 const ticks = computed(() => {
-  const ticks: number[] = [];
+  const result: number[] = [];
   const step = totalDuration.value > 120 ? 10 : totalDuration.value > 60 ? 5 : 1;
   for (let t = 0; t <= totalDuration.value; t += step) {
-    ticks.push(t);
+    result.push(t);
   }
-  return ticks;
+  return result;
 });
 
 // -------- 拖拽 --------
@@ -66,7 +73,6 @@ function onDragMove(e: MouseEvent) {
   const dx = e.clientX - dragStartX.value;
   const seg = script.segments.find(s => s.id === draggingSegId.value);
   if (!seg) return;
-  // 计算新的 index（简化：只允许重排顺序，不改时间）
   const newIndex = Math.max(0, Math.min(
     script.segments.length - 1,
     dragOrigStart.value + Math.round(dx / 80),
@@ -88,11 +94,8 @@ function onDragEnd() {
 
 // -------- 播放 --------
 function togglePlay() {
-  if (isPlaying.value) {
-    stopPlay();
-  } else {
-    startPlay();
-  }
+  if (isPlaying.value) stopPlay();
+  else startPlay();
 }
 
 function startPlay() {
@@ -117,6 +120,28 @@ function onRulerClick(e: MouseEvent) {
   const sec = x / pxPerSecond.value;
   if (sec >= 0 && sec <= totalDuration.value) {
     playheadSec.value = Math.round(sec * 10) / 10;
+  }
+}
+
+// -------- 导出 --------
+async function handleExport() {
+  showExportDialog.value = true;
+  exporting.value = true;
+  exportResult.value = null;
+  try {
+    // 同步到 project
+    script.syncToProject();
+    const proj = project.project;
+    const segs = script.segments;
+
+    const result = await exportProject(proj, segs);
+    downloadBlob(result.blob, result.filename);
+    exportResult.value = { filename: result.filename, fileCount: result.fileCount };
+    message.success(`已下载 ${result.filename}`);
+  } catch (err: any) {
+    message.error(err.message || '导出失败');
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -153,7 +178,6 @@ onUnmounted(() => { stopPlay(); });
     <!-- 时间轴 SVG -->
     <div class="timeline-wrap">
       <svg :width="scaledWidth" height="120" style="overflow: visible;">
-        <!-- 标尺 -->
         <g @click="onRulerClick">
           <line x1="60" :x2="60 + totalDuration * pxPerSecond" y1="20" y2="20" stroke="#999" stroke-width="1" />
           <text x="10" y="24" font-size="11" fill="#999">时间</text>
@@ -176,7 +200,6 @@ onUnmounted(() => { stopPlay(); });
           </g>
         </g>
 
-        <!-- 播放头 -->
         <line
           :x1="60 + playheadSec * pxPerSecond"
           :x2="60 + playheadSec * pxPerSecond"
@@ -187,11 +210,7 @@ onUnmounted(() => { stopPlay(); });
           stroke-dasharray="4"
         />
 
-        <!-- 段块 -->
-        <g
-          v-for="seg in script.segments"
-          :key="seg.id"
-        >
+        <g v-for="seg in script.segments" :key="seg.id">
           <rect
             :x="segStyle(seg).left"
             y="45"
@@ -211,29 +230,21 @@ onUnmounted(() => { stopPlay(); });
             font-size="11"
             fill="#fff"
             pointer-events="none"
-          >
-            {{ `段${seg.index + 1}` }}
-          </text>
+          >{{ `段${seg.index + 1}` }}</text>
           <text
             :x="segStyle(seg).left + 6"
             y="82"
             font-size="10"
             fill="rgba(255,255,255,0.8)"
             pointer-events="none"
-          >
-            {{ seg.audioDuration ? fmt(seg.audioDuration) : '?' }}
-          </text>
+          >{{ seg.audioDuration ? fmt(seg.audioDuration) : '?' }}</text>
         </g>
       </svg>
     </div>
 
-    <!-- 段列表（详情） -->
+    <!-- 段列表 -->
     <div class="seg-detail-list">
-      <div
-        v-for="seg in script.segments"
-        :key="seg.id"
-        class="seg-detail"
-      >
+      <div v-for="seg in script.segments" :key="seg.id" class="seg-detail">
         <NTag size="tiny" :type="seg.role === 'hook' ? 'error' : seg.role === 'cta' ? 'success' : 'default'">
           段 {{ seg.index + 1 }}
         </NTag>
@@ -245,10 +256,47 @@ onUnmounted(() => { stopPlay(); });
     <!-- 底部操作 -->
     <div class="bottom-bar">
       <NButton @click="router.push('/step/3')">← 返回 TTS</NButton>
-      <NButton type="primary" @click="router.push('/')">
-        ✅ 完成编辑
+      <NButton type="warning" @click="handleExport" :loading="exporting">
+        📦 导出项目
       </NButton>
     </div>
+
+    <!-- 导出对话框 -->
+    <NModal :show="showExportDialog" @update:show="showExportDialog = $event" :mask-closable="false" style="width: 500px;">
+      <NCard title="导出 HyperFrames 项目包" :bordered="false">
+        <NSpin v-if="exporting" size="medium">
+          <div style="height: 80px; display: flex; align-items: center; justify-content: center;">
+            <NText depth="3">正在编译项目文件...</NText>
+          </div>
+        </NSpin>
+
+        <div v-else-if="exportResult">
+          <NAlert type="success" :bordered="false" style="margin-bottom: 12px;">
+            导出成功！{{ exportResult.fileCount }} 个文件已打包下载。
+          </NAlert>
+          <NText depth="3" style="font-size: 13px;">
+            文件名：{{ exportResult.filename }}
+          </NText>
+
+          <NDivider style="margin: 12px 0;" />
+          <NText strong style="display: block; margin-bottom: 8px;">接下来要做的事：</NText>
+          <NList bordered size="small">
+            <NListItem>1. 解压 .zip 文件</NListItem>
+            <NListItem>2. cd 到解压目录</NListItem>
+            <NListItem>3. pip install edge-tts openai</NListItem>
+            <NListItem>4. cp .env.example .env，填入 MIMO_API_KEY</NListItem>
+            <NListItem>5. bash render.sh</NListItem>
+            <NListItem>6. 等待完成，renders/output.mp4 就是你的视频</NListItem>
+          </NList>
+        </div>
+
+        <template #footer>
+          <NSpace justify="end">
+            <NButton @click="showExportDialog = false">关闭</NButton>
+          </NSpace>
+        </template>
+      </NCard>
+    </NModal>
   </div>
 </template>
 

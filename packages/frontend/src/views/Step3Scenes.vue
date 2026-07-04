@@ -1,22 +1,94 @@
 <script setup lang="ts">
-import { computed, onUnmounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useScriptStore } from '../stores/script';
 import { useVoicesStore } from '../stores/voices';
 import { useProjectStore } from '../stores/project';
 import { useRouter } from 'vue-router';
-import { NButton, NSelect, NSlider, NTag, NText, NCard, NSpace, NSpin, NAlert, NDivider } from 'naive-ui';
-import type { ScriptSegment } from '@webframes/shared-types';
+import {
+  NButton, NSelect, NTag, NText, NCard, NSpace, NSpin,
+  NAlert, NDivider, NDropdown, useMessage,
+} from 'naive-ui';
+import type { SelectGroupOption, SelectOption } from 'naive-ui';
+import type { ScriptSegment, VoiceEntry, DesignVoice, CloneVoice } from '@webframes/shared-types';
+import VoiceDesignDialog from '../components/VoiceDesignDialog.vue';
+import VoiceCloneDialog from '../components/VoiceCloneDialog.vue';
+import VoiceLibraryDialog from '../components/VoiceLibraryDialog.vue';
 
 const script = useScriptStore();
 const voices = useVoicesStore();
 const project = useProjectStore();
 const router = useRouter();
+const message = useMessage();
 
-const canSynthesize = computed(() => script.segmentCount > 0 && !script.synthesizingIds.size);
+// 对话框状态
+const showDesignDialog = ref(false);
+const showCloneDialog = ref(false);
+const showLibraryDialog = ref(false);
+
+onMounted(() => {
+  voices.load();
+});
+
+const canSynthesize = computed(() => script.segmentCount > 0);
+
+/** 分组音色下拉选项 */
+const voiceOptions = computed<(SelectOption | SelectGroupOption)[]>(() => {
+  const groups: (SelectOption | SelectGroupOption)[] = [];
+
+  // 预置音色组
+  if (voices.presetEntries.length > 0) {
+    groups.push({
+      type: 'group',
+      label: '预置音色',
+      key: 'preset-group',
+      children: voices.presetEntries.map(v => ({
+        label: `${v.alias}（${v.gender === 'female' ? '女' : v.gender === 'male' ? '男' : '中'}·${v.lang === 'zh-CN' ? '中文' : v.lang === 'en-US' ? '英文' : '多语'}）`,
+        value: v.id,
+      })),
+    });
+  }
+
+  // 设计音色组
+  if (voices.designEntries.length > 0) {
+    groups.push({
+      type: 'group',
+      label: '我设计的音色',
+      key: 'design-group',
+      children: voices.designEntries.map(v => ({
+        label: `${v.alias}（设计）`,
+        value: v.id,
+      })),
+    });
+  }
+
+  // 复刻音色组
+  if (voices.cloneEntries.length > 0) {
+    groups.push({
+      type: 'group',
+      label: '我复刻的音色',
+      key: 'clone-group',
+      children: voices.cloneEntries.map(v => ({
+        label: `${v.alias}（复刻）`,
+        value: v.id,
+      })),
+    });
+  }
+
+  return groups;
+});
+
+/** 获取段的音色显示名 */
+function getVoiceName(voiceId: string): string {
+  const v = voices.findById(voiceId);
+  return v?.alias ?? voiceId;
+}
 
 /** 批量 TTS */
 async function synthesizeAll() {
+  if (!canSynthesize.value) return;
+  message.info(`开始批量合成 ${script.segmentCount} 段...`);
   await script.synthesizeAll();
+  message.success('批量合成完成');
 }
 
 /** 跳转 Step 4 */
@@ -25,21 +97,25 @@ function goNext() {
   router.push('/step/4');
 }
 
-/** 音色下拉选项 */
-const voiceOptions = computed(() => {
-  const list = voices.entries;
-  return list.map((v: any) => ({
-    label: `${v.alias || v.nativeId}（${v.gender === 'female' ? '女' : v.gender === 'male' ? '男' : '中'}·${v.lang === 'zh-CN' ? '中文' : '英文'}）`,
-    value: v.id,
-  }));
-});
+/** 音色下拉菜单底部操作 */
+const dropdownActions = [
+  { label: '🎵 设计新音色', key: 'design' },
+  { label: '🎙️ 复刻新音色', key: 'clone' },
+  { label: '⚙️ 音色库管理', key: 'library' },
+];
+
+function handleDropdownAction(key: string) {
+  if (key === 'design') showDesignDialog.value = true;
+  else if (key === 'clone') showCloneDialog.value = true;
+  else if (key === 'library') showLibraryDialog.value = true;
+}
 </script>
 
 <template>
   <div class="step-container">
     <h2>Step 3 · 场景编排 & TTS 试听</h2>
     <p class="desc">
-      为每段选择音色，点击 <NText type="info">🔊 试听</NText> 合成并播放音频，确认无误后进入时间轴。
+      为每段选择音色，点击 <NText type="info">🔊 合成</NText> 生成并播放音频，确认无误后进入时间轴。
     </p>
 
     <!-- 批量操作栏 -->
@@ -52,12 +128,31 @@ const voiceOptions = computed(() => {
       >
         批量 TTS 合成（{{ script.segmentCount }} 段）
       </NButton>
-      <NButton style="margin-left: 12px" @click="goNext" type="success">
+      <NDropdown
+        :options="dropdownActions"
+        placement="bottom-start"
+        trigger="click"
+        @select="handleDropdownAction"
+      >
+        <NButton style="margin-left: 12px">⚙️ 音色库</NButton>
+      </NDropdown>
+      <div style="flex: 1;" />
+      <NButton type="success" @click="goNext">
         进入时间轴 →
       </NButton>
     </div>
 
     <NDivider />
+
+    <!-- 加载中 -->
+    <NSpin v-if="voices.loading" size="small">
+      <div style="height: 40px;" />
+    </NSpin>
+
+    <!-- 错误提示 -->
+    <NAlert v-if="voices.error" type="warning" :bordered="false" style="margin-bottom: 12px;">
+      {{ voices.error }}
+    </NAlert>
 
     <!-- 段列表 -->
     <div class="segment-list">
@@ -71,13 +166,11 @@ const voiceOptions = computed(() => {
         <div class="seg-header">
           <NTag size="small" :type="seg.role === 'hook' ? 'error' : seg.role === 'cta' ? 'success' : 'default'">
             段 {{ seg.index + 1 }}
-            {{ seg.role ? `· ${seg.role}` : '' }}
+            <template v-if="seg.role">· {{ seg.role }}</template>
           </NTag>
           <NText depth="3" style="font-size: 12px;">
             {{ seg.text.length }} 字
-            <template v-if="seg.audioDuration">
-              · {{ Math.round(seg.audioDuration) }}s
-            </template>
+            <template v-if="seg.audioDuration">· {{ Math.round(seg.audioDuration) }}s</template>
           </NText>
         </div>
 
@@ -95,6 +188,14 @@ const voiceOptions = computed(() => {
               placeholder="选择音色"
               @update:value="(val: string) => script.updateSegmentTts(seg.id, { voiceId: val })"
             />
+            <NDropdown
+              :options="dropdownActions"
+              placement="bottom"
+              trigger="click"
+              @select="handleDropdownAction"
+            >
+              <NButton size="small" quaternary>+</NButton>
+            </NDropdown>
           </div>
 
           <!-- 语速 -->
@@ -152,6 +253,11 @@ const voiceOptions = computed(() => {
         下一步：时间轴编排 →
       </NButton>
     </div>
+
+    <!-- 对话框 -->
+    <VoiceDesignDialog v-model:show="showDesignDialog" />
+    <VoiceCloneDialog v-model:show="showCloneDialog" />
+    <VoiceLibraryDialog v-model:show="showLibraryDialog" />
   </div>
 </template>
 

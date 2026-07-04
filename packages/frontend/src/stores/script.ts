@@ -16,6 +16,7 @@ import type {
   TtsRequest,
 } from '@webframes/shared-types';
 import { useProjectStore } from './project';
+import { useVoicesStore } from './voices';
 import { synthTts } from '../api/tts';
 
 /** 分段模式 */
@@ -287,12 +288,30 @@ export const useScriptStore = defineStore('script', () => {
     ttsErrors.value.delete(segmentId);
 
     try {
+      // 从音色库查找音色信息
+      const voicesStore = useVoicesStore();
+      const voice = voicesStore.findById(seg.tts.voiceId);
+
       const req: TtsRequest = {
         text: seg.text,
         voiceId: seg.tts.voiceId,
         engine: seg.tts.engine,
         speed: seg.tts.speed,
       };
+
+      // 按音色类型补充字段
+      if (voice?.kind === 'design') {
+        req.voiceType = 'design';
+        req.voiceDescription = voice.promptText;
+      } else if (voice?.kind === 'clone') {
+        req.voiceType = 'clone';
+        // 从 IndexedDB 获取样本 base64
+        const sampleBase64 = await voicesStore.getSampleBase64(voice.sampleAudioId);
+        if (sampleBase64) {
+          req.voiceSampleBase64 = sampleBase64;
+        }
+      }
+
       // apiPost 成功时直接返回 TtsResponse，失败时 throw
       const data = await synthTts(req);
 
