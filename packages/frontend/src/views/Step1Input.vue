@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, nextTick } from 'vue';
 import { useMessage } from 'naive-ui';
+import { useRouter } from 'vue-router';
 import { useScriptStore } from '../stores/script';
 
 const message = useMessage();
+const router = useRouter();
 const script = useScriptStore();
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -17,14 +19,39 @@ const estimatedDuration = computed(() => {
   return min > 0 ? `${min}分${s}秒` : `${s}秒`;
 });
 
-/** 处理粘贴（去掉 Markdown） */
-function handlePaste(e: ClipboardEvent) {
-  e.preventDefault();
-  const text = e.clipboardData?.getData('text/plain') ?? '';
-  script.setRawText(text);
+/** 去掉 Markdown 格式，保留纯文本 */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
-/** 导入 txt 文件 */
+/** 处理粘贴：在光标位置插入（追加而非覆盖），同时去掉 Markdown */
+function handlePaste(e: ClipboardEvent) {
+  e.preventDefault();
+  const pasted = e.clipboardData?.getData('text/plain') ?? '';
+  const cleaned = stripMarkdown(pasted);
+
+  const ta = e.target as HTMLTextAreaElement;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const before = script.rawText.slice(0, start);
+  const after = script.rawText.slice(end);
+  script.rawText = before + cleaned + after;
+
+  // 移动光标到粘贴内容末尾
+  nextTick(() => {
+    ta.focus();
+    const pos = start + cleaned.length;
+    ta.setSelectionRange(pos, pos);
+  });
+}
+
+/** 导入 txt 文件（追加到末尾） */
 function handleFileImport() {
   const input = document.createElement('input');
   input.type = 'file';
@@ -33,7 +60,11 @@ function handleFileImport() {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
     const text = await file.text();
-    script.setRawText(text);
+    const cleaned = stripMarkdown(text);
+    // 追加到已有内容末尾
+    const sep = script.rawText && !script.rawText.endsWith('\n') ? '\n\n' : '';
+    script.rawText = script.rawText + sep + cleaned;
+    message.success(`已导入 ${cleaned.replace(/\s/g, '').length} 字`);
   };
   input.click();
 }
@@ -44,9 +75,11 @@ function startSplitting() {
     message.warning('请先输入或粘贴文案');
     return;
   }
-  script.setRawText(script.rawText);
+  // 按回车预分段，方便 Step 2 继续编辑
   script.splitByNewline();
-  message.success(`已按回车分成 ${script.segmentCount} 段`);
+  message.success(`已按回车分成 ${script.segmentCount} 段，进入分段编辑`);
+  // 跳转到 Step 2
+  router.push('/step/2');
 }
 </script>
 

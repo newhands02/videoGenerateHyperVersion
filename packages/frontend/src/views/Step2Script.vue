@@ -151,7 +151,7 @@ function goNext() {
     <!-- ======================== 模式 1：手动分段 ======================== -->
     <div v-if="script.splitMode === 'manual'" class="mode-panel">
       <div class="panel-toolbar">
-        <n-button size="small" @click="script.splitByNewline()" :disabled="script.segments.length === 0">
+        <n-button size="small" @click="script.splitByNewline()" :disabled="script.rawText.trim().length === 0">
           🔄 按回车重分
         </n-button>
         <n-button size="small" @click="script.addSegment()">

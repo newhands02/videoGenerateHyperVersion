@@ -1,10 +1,29 @@
 <script setup lang="ts">
 import { computed, h } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { NConfigProvider, NMessageProvider, NDialogProvider, NNotificationProvider, NLayout, NLayoutHeader, NLayoutSider, NLayoutContent, NMenu, NIcon, NSpace, NText } from 'naive-ui';
 import type { MenuOption } from 'naive-ui';
 
 const route = useRoute();
+const router = useRouter();
+
+/** 菜单 key → 路由路径 */
+const keyToPath: Record<string, string> = {
+  home: '/',
+  step1: '/step/1',
+  step2: '/step/2',
+  step3: '/step/3',
+  step4: '/step/4',
+};
+
+/** 路由 name → 菜单 key */
+const routeNameToKey: Record<string, string> = {
+  home: 'home',
+  step1: 'step1',
+  step2: 'step2',
+  step3: 'step3',
+  step4: 'step4',
+};
 
 const menuOptions = computed<MenuOption[]>(() => [
   { label: () => h('span', '🏠 首页'), key: 'home' },
@@ -14,7 +33,13 @@ const menuOptions = computed<MenuOption[]>(() => [
   { label: () => h('span', '④ 时间轴'), key: 'step4' },
 ]);
 
-const activeKey = computed(() => (route.name as string) ?? 'home');
+const activeKey = computed(() => routeNameToKey[route.name as string] ?? 'home');
+
+/** 菜单点击跳转 */
+function handleMenuSelect(key: string) {
+  const path = keyToPath[key];
+  if (path) router.push(path);
+}
 </script>
 
 <template>
@@ -33,7 +58,7 @@ const activeKey = computed(() => (route.name as string) ?? 'home');
                 <span class="logo-mark">W</span>
                 <span class="logo-text">WebFrames</span>
               </div>
-              <NMenu :value="activeKey" :options="menuOptions" :indent="18" />
+              <NMenu :value="activeKey" :options="menuOptions" :indent="18" @update:value="handleMenuSelect" />
             </NLayoutSider>
             <NLayout>
               <NLayoutHeader bordered class="topbar">
