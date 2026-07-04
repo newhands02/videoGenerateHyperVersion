@@ -196,6 +196,8 @@ function goNext() {
             </div>
           </div>
           <div class="seg-actions">
+            <n-button text size="tiny" @click="script.insertSegmentBefore(seg.id)" title="在此段前插入">⬆＋</n-button>
+            <n-button text size="tiny" @click="script.addSegment(seg.id)" title="在此段后插入">⬇＋</n-button>
             <n-button text size="tiny" @click="script.moveUp(seg.id)" :disabled="idx === 0">↑</n-button>
             <n-button text size="tiny" @click="script.moveDown(seg.id)" :disabled="idx === script.segmentCount - 1">↓</n-button>
             <n-button text size="tiny" type="error" @click="script.removeSegment(seg.id)">×</n-button>
@@ -369,6 +371,8 @@ function goNext() {
                 </div>
               </div>
               <div class="seg-actions">
+                <n-button text size="tiny" @click="script.insertSegmentBefore(seg.id)" title="在此段前插入">⬆＋</n-button>
+                <n-button text size="tiny" @click="script.addSegment(seg.id)" title="在此段后插入">⬇＋</n-button>
                 <n-button text size="tiny" @click="script.removeSegment(seg.id)" type="error">×</n-button>
               </div>
             </div>

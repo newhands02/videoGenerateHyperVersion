@@ -120,12 +120,22 @@ export const useScriptStore = defineStore('script', () => {
     clearAiState();
   }
 
-  /** 手动添加空段 */
+  /** 手动添加空段（在指定段之后） */
   function addSegment(afterId?: string) {
     const idx = afterId
       ? segments.value.findIndex(s => s.id === afterId)
       : segments.value.length - 1;
     const insertAt = idx >= 0 ? idx + 1 : segments.value.length;
+    const newSeg = createSegment('', { index: insertAt, source: 'manual' });
+    segments.value.splice(insertAt, 0, newSeg);
+    reindex();
+    activeSegmentId.value = newSeg.id;
+  }
+
+  /** 在指定段之前插入空段 */
+  function insertSegmentBefore(id: string) {
+    const idx = segments.value.findIndex(s => s.id === id);
+    const insertAt = idx >= 0 ? idx : 0;
     const newSeg = createSegment('', { index: insertAt, source: 'manual' });
     segments.value.splice(insertAt, 0, newSeg);
     reindex();
@@ -415,6 +425,7 @@ export const useScriptStore = defineStore('script', () => {
     setRawText,
     splitByNewline,
     addSegment,
+    insertSegmentBefore,
     updateSegmentText,
     removeSegment,
     moveUp,

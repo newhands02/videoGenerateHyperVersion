@@ -532,13 +532,27 @@ function generateRenderSh(): string {
     '',
     'HF_VERSION="${HF_VERSION:-0.6.56}"',
     '',
+    '# 检测 Python 命令',
+    'if command -v python3 &>/dev/null; then',
+    '  PYTHON=python3',
+    'elif command -v python &>/dev/null; then',
+    '  PYTHON=python',
+    'else',
+    '  echo "❌ 未找到 Python，请安装 Python 3"',
+    '  exit 1',
+    'fi',
+    '',
     'echo "════════════════════════════════════════"',
-    'echo "  Step 1: TTS 配音"',
+    'echo "  Step 1: 准备配音音频"',
     'echo "════════════════════════════════════════"',
     'if [ -f narration.wav ]; then',
     '  echo "⚠️  narration.wav 已存在，跳过。如需重新生成: rm narration.wav"',
+    'elif [ -d segments ] && ls segments/*.wav 1>/dev/null 2>&1; then',
+    '  echo "📦 发现预合成音频，拼接为 narration.wav..."',
+    '  "$PYTHON" concat_audio.py',
     'else',
-    '  python3 tts.py --timed --output-timestamps timeline.json script.txt narration.wav',
+    '  echo "🎙️  调用 TTS 生成配音..."',
+    '  "$PYTHON" tts.py --timed --output-timestamps timeline.json script.txt narration.wav',
     'fi',
     '',
     'echo ""',
@@ -558,6 +572,119 @@ function generateRenderSh(): string {
     'ls -lh renders/*.mp4 2>/dev/null || echo "  (检查日志)"',
     '',
   ].join('\n');
+}
+
+/** 生成 concat_audio.py — 拼接预合成的 segments/*.wav 为 narration.wav */
+function generateConcatAudioPy(): string {
+  return `#!/usr/bin/env python3
+"""
+WebFrames 音频拼接器
+====================
+将 segments/ 目录下的预合成音频拼接为 narration.wav
+同时生成带静默间隔的 timeline.json
+
+用法:
+  python3 concat_audio.py
+
+如果 segments/ 目录不存在或为空，会提示使用 tts.py 代替。
+"""
+
+import wave, glob, os, json, struct
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).parent
+SEGMENTS_DIR = SCRIPT_DIR / "segments"
+OUTPUT_FILE = SCRIPT_DIR / "narration.wav"
+TIMELINE_FILE = SCRIPT_DIR / "timeline.json"
+CONFIG_FILE = SCRIPT_DIR / "webframes.config.json"
+
+# 时间参数
+START_OFFSET = 0.5   # 开头静默 0.5s
+GAP = 0.35           # 段间静默 0.35s
+
+def main():
+    if not SEGMENTS_DIR.exists():
+        print("❌ segments/ 目录不存在，请使用 tts.py 生成配音")
+        return False
+
+    wav_files = sorted(glob.glob(str(SEGMENTS_DIR / "*.wav")))
+    if not wav_files:
+        print("❌ segments/ 目录中没有 WAV 文件，请使用 tts.py 生成配音")
+        return False
+
+    print(f"📂 找到 {len(wav_files)} 个音频文件")
+
+    # 读取配置获取段文本
+    seg_texts = []
+    if CONFIG_FILE.exists():
+        config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        seg_texts = [s.get("text", "") for s in config.get("segments", [])]
+
+    # 读取第一个文件获取参数
+    with wave.open(wav_files[0], "rb") as w0:
+        params = w0.getparams()
+        framerate = w0.getframerate()
+        nchannels = w0.getnchannels()
+        sampwidth = w0.getsampwidth()
+
+    # 生成静默帧
+    def silence(duration_sec):
+        nframes = int(framerate * duration_sec)
+        return b'\\x00' * (nframes * sampwidth * nchannels)
+
+    # 拼接：开头静默 + 段1 + 静默 + 段2 + ...
+    durations = []
+    combined = silence(START_OFFSET)
+
+    for i, wf_path in enumerate(wav_files):
+        with wave.open(wf_path, "rb") as w:
+            durations.append(w.getnframes() / w.getframerate())
+            combined += w.readframes(w.getnframes())
+        if i < len(wav_files) - 1:
+            combined += silence(GAP)
+
+    # 写入 narration.wav
+    with wave.open(str(OUTPUT_FILE), "wb") as out:
+        out.setparams(params)
+        out.writeframes(combined)
+
+    size_mb = os.path.getsize(OUTPUT_FILE) / 1024 / 1024
+    total_dur = len(durations) and sum(durations) + START_OFFSET + GAP * (len(durations) - 1)
+    print(f"✅ narration.wav 已生成 ({size_mb:.1f} MB, {total_dur:.1f}s)")
+
+    # 生成 timeline.json
+    t = START_OFFSET
+    entries = []
+    for i, dur in enumerate(durations):
+        entries.append({
+            "index": i + 1,
+            "start": round(t, 1),
+            "end": round(t + dur, 1),
+            "text": seg_texts[i] if i < len(seg_texts) else f"Segment {i+1}",
+        })
+        t += dur + GAP
+
+    TIMELINE_FILE.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    print(f"📋 timeline.json 已更新（{len(entries)} 段）")
+
+    # 更新 hyperframes.json 的 duration
+    hf_path = SCRIPT_DIR / "hyperframes.json"
+    if hf_path.exists():
+        hf = json.loads(hf_path.read_text(encoding="utf-8"))
+        total_with_gaps = sum(durations) + START_OFFSET + GAP * (len(durations) - 1)
+        hf["duration"] = int(total_with_gaps) + 2  # +2s 余量
+        hf_path.write_text(json.dumps(hf, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"hyperframes.json duration 已更新: {hf['duration']}s")
+
+    return True
+
+if __name__ == "__main__":
+    if not main():
+        exit(1)
+`;
 }
 
 /** 生成 package.json */
@@ -612,19 +739,22 @@ function generateReadme(project: Project, segments: ScriptSegment[]): string {
 ## 快速开始
 
 \`\`\`bash
-# 1. 安装依赖
+# 1. 安装依赖（如需 TTS 重新生成配音）
 pip install edge-tts openai
-# (如果用 edge-tts 只需要 edge-tts，如果用 mimo 需要 openai)
 
-# 2. 配置凭据（仅 MiMo 引擎）
+# 2. 配置凭据（仅 MiMo 引擎需要重新生成时）
 cp .env.example .env
 # 编辑 .env 填入 MIMO_API_KEY
 
-# 3. 一键渲染
+# 3. 一键渲染（已合成音频会自动拼接，无需 API Key）
 bash render.sh
 
 # 或分步执行:
+# 3a. 如果 segments/ 目录有音频：拼接为 narration.wav
+python3 concat_audio.py
+# 3b. 如果没有预合成音频：用 TTS 生成
 python3 tts.py --timed --output-timestamps timeline.json script.txt narration.wav
+# 3c. 渲染
 npx hyperframes lint
 npx hyperframes render
 \`\`\`
@@ -639,6 +769,7 @@ npx hyperframes render
 | script.txt | 纯文本脚本 |
 | timeline.json | 精确时间戳 |
 | tts.py | TTS 配音脚本（双引擎） |
+| concat_audio.py | 拼接预合成音频为 narration.wav |
 | render.sh | 一键渲染脚本 |
 | .env.example | 凭据模板 |
 
@@ -717,6 +848,7 @@ export async function exportProject(
   zip.file('script.txt', generateScriptTxt(segments));
   zip.file('timeline.json', generateTimelineJson(segments));
   zip.file('tts.py', generateTtsPy());
+  zip.file('concat_audio.py', generateConcatAudioPy());
   zip.file('render.sh', generateRenderSh());
   zip.file('package.json', generatePackageJson());
   zip.file('.env.example', generateEnvExample());
@@ -751,7 +883,7 @@ export async function exportProject(
   return {
     blob,
     filename,
-    fileCount: 10 + audioCount,
+    fileCount: 11 + audioCount,
   };
 }
 
