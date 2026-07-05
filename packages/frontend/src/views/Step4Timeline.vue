@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router';
 import {
   NButton, NTag, NText, NSlider, NModal, NCard,
   NSpace, NList, NListItem, NAlert, NSpin,
-  NDivider, NProgress, useMessage,
+  NDivider, NProgress, NRadioGroup, NRadio, useMessage,
 } from 'naive-ui';
 import { exportProject, downloadBlob } from '../lib/exporter';
 import {
@@ -34,6 +34,7 @@ const videoExporting = ref(false);
 const videoExportProgress = ref(0);
 const videoExportPhase = ref('');
 const videoExportResult = ref<VideoExportResult | null>(null);
+const videoAnimationStyle = ref<'cinematic' | 'minimal' | 'static'>('cinematic');
 const videoEstDuration = computed(() => estimateVideoDuration(script.segments));
 const videoAudioCount = computed(() => countAudioSegments(script.segments));
 
@@ -349,7 +350,7 @@ async function handleExport() {
 }
 
 // -------- 直接导出视频 --------
-async function handleExportVideo() {
+function handleExportVideo() {
   if (script.segments.length === 0) {
     message.warning('没有分段可导出');
     return;
@@ -360,7 +361,15 @@ async function handleExportVideo() {
     message.warning('所有分段都没有音频，导出的视频将没有声音。请先在 Step 3 合成 TTS。');
   }
 
+  // 打开对话框（设置阶段）
   showVideoExportDialog.value = true;
+  videoExporting.value = false;
+  videoExportResult.value = null;
+  videoExportProgress.value = 0;
+  videoExportPhase.value = '';
+}
+
+async function startVideoExport() {
   videoExporting.value = true;
   videoExportResult.value = null;
   videoExportProgress.value = 0;
@@ -371,6 +380,7 @@ async function handleExportVideo() {
     const result = await exportVideo({
       project: project.project,
       segments: script.segments,
+      animationStyle: videoAnimationStyle.value,
       onProgress: (current, total, phase) => {
         videoExportProgress.value = total > 0 ? Math.round((current / total) * 100) : 0;
         videoExportPhase.value = phase;
@@ -613,9 +623,37 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 
     <!-- 视频导出对话框 -->
     <NModal :show="showVideoExportDialog" :mask-closable="false" style="width: 500px;">
-      <NCard :title="videoExportResult ? '视频导出完成' : '正在导出视频'" :bordered="false">
+      <NCard :title="videoExportResult ? '视频导出完成' : (videoExporting ? '正在导出视频' : '导出视频设置')" :bordered="false">
+        <!-- 准备阶段（未开始） -->
+        <div v-if="!videoExporting && !videoExportResult" style="padding: 8px 0;">
+          <NText style="display: block; margin-bottom: 8px;">选择动画风格：</NText>
+          <NRadioGroup v-model:value="videoAnimationStyle" style="width: 100%;">
+            <NSpace vertical size="small">
+              <NRadio value="cinematic">
+                <NText strong>🎬 电影感（推荐）</NText>
+                <br />
+                <NText depth="3" style="font-size: 12px;">动态渐变背景 + 文字入场缩放/位移 + 角色装饰（星光/雨滴/光线等）+ 字幕逐字显现 + 段间过渡</NText>
+              </NRadio>
+              <NRadio value="minimal">
+                <NText strong>✨ 轻度动效</NText>
+                <br />
+                <NText depth="3" style="font-size: 12px;">渐变背景 + 文字轻动效（动效强度 40%）</NText>
+              </NRadio>
+              <NRadio value="static">
+                <NText strong>📊 静态</NText>
+                <br />
+                <NText depth="3" style="font-size: 12px;">无动效，纯渐变 + 文字（适合需要二次剪辑的用户）</NText>
+              </NRadio>
+            </NSpace>
+          </NRadioGroup>
+          <NAlert type="info" :bordered="false" style="margin-top: 16px;">
+            预计时长 {{ fmt(videoEstDuration) }}（实时录制 = 视频时长）<br />
+            音频覆盖：{{ videoAudioCount }} / {{ script.segmentCount }} 段
+          </NAlert>
+        </div>
+
         <!-- 导出中 -->
-        <div v-if="videoExporting" style="padding: 12px 0;">
+        <div v-else-if="videoExporting" style="padding: 12px 0;">
           <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
             <NSpin size="large" />
           </div>
@@ -666,7 +704,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 
         <template #footer>
           <NSpace justify="end">
-            <NButton @click="closeVideoExportDialog">关闭</NButton>
+            <NButton v-if="!videoExporting && !videoExportResult" @click="closeVideoExportDialog">取消</NButton>
+            <NButton v-if="!videoExporting && !videoExportResult" type="primary" @click="startVideoExport">
+              开始导出
+            </NButton>
+            <NButton v-else @click="closeVideoExportDialog">关闭</NButton>
           </NSpace>
         </template>
       </NCard>
