@@ -632,12 +632,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
               <NRadio value="cinematic">
                 <NText strong>🎬 电影感（推荐）</NText>
                 <br />
-                <NText depth="3" style="font-size: 12px;">动态渐变背景 + 文字入场缩放/位移 + 角色装饰（星光/雨滴/光线等）+ 字幕逐字显现 + 段间过渡</NText>
+                <NText depth="3" style="font-size: 12px;">逐字飞入动画（不同方向+旋转+缩放） + 持续呼吸缩放 + 动态渐变背景（漂移光斑） + 角色装饰（星光/雨滴/光线/箭头） + 字幕逐字显现 + 段间过渡光效</NText>
               </NRadio>
               <NRadio value="minimal">
                 <NText strong>✨ 轻度动效</NText>
                 <br />
-                <NText depth="3" style="font-size: 12px;">渐变背景 + 文字轻动效（动效强度 40%）</NText>
+                <NText depth="3" style="font-size: 12px;">整段文字平滑淡入淡出 + 渐变背景（无装饰元素，无逐字动画）</NText>
               </NRadio>
               <NRadio value="static">
                 <NText strong>📊 静态</NText>

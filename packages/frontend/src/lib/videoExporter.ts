@@ -48,7 +48,11 @@ const GAP = 0.45;            // 段间过渡（比之前更长，给动画时间
 const END_PADDING = 0.6;     // 结尾黑屏余量
 const MIN_SEG_DUR = 1.0;     // 每段最小时长（秒）
 
-/** 动画风格 -> intensity 映射 */
+/** 动画风格 -> intensity 映射
+ * static  : 0.0  - 完全无动效，纯静态
+ * minimal : 0.4  - 整段淡入淡出（主文字），无装饰
+ * cinematic: 1.0 - 逐字飞入 + 呼吸 + 装饰 + 段间过渡
+ */
 const STYLE_INTENSITY = {
   cinematic: 1.0,
   minimal: 0.4,

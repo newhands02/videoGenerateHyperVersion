@@ -266,36 +266,215 @@ function hexToRgba(color: string, a: number): string {
 // ==================== 2. 文字入场/出场动画 ====================
 
 /**
- * 绘制主文字：入场缩放+位移+模糊清晰化
- * t ∈ [0, T_ENTRANCE] 入场
- * t ∈ [T_ENTRANCE, segDur - T_EXIT] 保持
- * t ∈ [segDur - T_EXIT, segDur] 出场
+ * 绘制主文字：三层动效
+ * - intensity = 0 (static)   : 静态文字，无任何动效
+ * - intensity ≈ 0.4 (minimal): 整段淡入 + 整段淡出
+ * - intensity = 1.0 (cinematic): 真正的 kinetic typography
+ *                                  · 逐字延迟飞入（ty 从下方 + scale 0.4→1 + blur 6→0）
+ *                                  · 持续呼吸（轻微 scale 1±0.03 正弦）
+ *                                  · 整段出场：scale 1→0.92 + 整段上移 + 渐隐
+ *                                  · 文字描边+投影（高级感）
  */
 export function drawAnimatedMainText(fc: FrameContext): { alpha: number } {
-  const { ctx, width, height, segTime, segDur, text, intensity, role } = fc;
-  const { alpha, scale, ty, blur, opacity } = computeTextMotion(segTime, segDur, intensity, role);
+  const { ctx, width, height, segTime, segDur, text, intensity, role, seed } = fc;
 
-  if (opacity <= 0) return { alpha: 0 };
+  if (intensity <= 0) {
+    // static: 直接画，不动
+    return drawPlainText(fc, 1);
+  }
 
   const fontSize = Math.round(height / 18);
+  const maxWidth = width * 0.78;
+
   ctx.save();
   ctx.font = `bold ${fontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-
-  // Canvas 2D 的 filter 性能较差但可用
-  if (blur > 0.1) {
-    ctx.filter = `blur(${blur.toFixed(1)}px)`;
-  }
-
-  const maxWidth = width * 0.78;
   const lines = wrapText(ctx, text, maxWidth);
   const lineHeight = fontSize * 1.5;
-  const totalH = lines.length * lineHeight;
   const cx = width / 2;
-  const cy = height / 2 + ty;
+  const cy = height / 2;
 
-  // 文字描边（让字在任何背景下都清晰）
+  // 文本总宽（用于逐字定位）
+  // 先把字体设回普通大小测量
+  ctx.font = `bold ${fontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+
+  // 段内整体 progress
+  let progress: number;
+  let globalTy: number;
+  let globalScale: number;
+  if (segTime < T_ENTRANCE) {
+    const t = segTime / T_ENTRANCE;
+    progress = ease.outCubic(t);
+    globalTy = lerp(20 * intensity, 0, progress);
+    globalScale = lerp(0.96, 1.0, progress);
+  } else if (segTime > segDur - T_EXIT) {
+    const t = (segTime - (segDur - T_EXIT)) / T_EXIT;
+    const e = ease.outCubic(t);
+    progress = 1 - e;
+    globalTy = lerp(0, -25 * intensity, e);
+    globalScale = lerp(1.0, 0.93, e);
+  } else {
+    progress = 1;
+    globalTy = 0;
+    globalScale = 1.0;
+  }
+
+  if (progress <= 0) {
+    ctx.restore();
+    return { alpha: 0 };
+  }
+
+  // 呼吸效果（仅 cinematic）
+  let breathe = 0;
+  if (intensity >= 0.9) {
+    breathe = Math.sin(segTime * 1.6) * 0.025 * intensity;
+  }
+
+  // 逐字延迟入场（仅 cinematic）
+  // 每字延迟 = T_ENTRANCE / 总字数 * intensity 比例
+  let charDelay = 0;
+  if (intensity >= 0.9) {
+    const totalChars = text.replace(/\n/g, '').length;
+    // 每字最多 0.06s 延迟，强度越大字越紧凑
+    charDelay = Math.min(0.06, T_ENTRANCE / Math.max(8, totalChars)) * intensity;
+  }
+
+  // 整段文字的渐显 alpha
+  ctx.globalAlpha = progress;
+
+  // 装饰：cinematic 模式下绘制高亮描边 + 投影
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+  ctx.shadowBlur = 18 + 12 * intensity;
+  ctx.shadowOffsetY = 3;
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = `rgba(0, 0, 0, ${0.3 + 0.1 * intensity})`;
+  ctx.lineWidth = Math.max(1, fontSize / 60);
+
+  // 计算所有行宽（用于水平居中）
+  // 把所有字符展平，计算每个字的位置
+  const allChars: Array<{ ch: string; line: number; xInLine: number; w: number }> = [];
+  lines.forEach((line, lineIdx) => {
+    let xInLine = 0;
+    for (const ch of line) {
+      const w = ctx.measureText(ch).width;
+      allChars.push({ ch, line: lineIdx, xInLine, w });
+      xInLine += w;
+    }
+  });
+
+  // 用随机数决定每个字的入场方向（cinematic 模式）
+  // 让一部分字从左飞入、一部分从右飞入、一部分从下飞入
+  const dirRand = mulberry32(seed * 7 + 13);
+
+  // 计算每行宽度（用于水平居中）
+  const lineWidths = lines.map(l => ctx.measureText(l).width);
+
+  // 整体缩放基准
+  const baseScale = globalScale + breathe;
+
+  // 逐字绘制
+  let charIdx = 0;
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
+    const lineW = lineWidths[lineIdx];
+    const lineXStart = cx - lineW / 2; // 这一行第一个字的 x 起点
+    const y = cy - (lines.length * lineHeight) / 2 + lineIdx * lineHeight + lineHeight / 2 + globalTy;
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      const charInfo = allChars[charIdx];
+      const cxCh = lineXStart + charInfo.xInLine + charInfo.w / 2;
+
+      // 单字延迟入场
+      const localSegTime = segTime - charIdx * charDelay;
+      let chScale = 1.0;
+      let chAlpha = progress;
+      let chTy = 0;
+      let chBlur = 0;
+      let chRot = 0;
+
+      if (intensity >= 0.9 && localSegTime < T_ENTRANCE) {
+        // cinematic: 逐字入场
+        const t = clamp(localSegTime / T_ENTRANCE, 0, 1);
+        const e = ease.outBack(t);
+        chScale = lerp(0.4, 1.0, e);
+        chAlpha = clamp(progress * e, 0, 1);
+        chBlur = lerp(6, 0, e);
+        // 随机方向飞入
+        const r = dirRand();
+        if (r < 0.33) {
+          // 从左飞入
+          chTy = lerp(-60, 0, e);
+        } else if (r < 0.66) {
+          // 从下飞入
+          chTy = lerp(60, 0, e);
+        } else {
+          // 从右飞入（轻微旋转）
+          chTy = lerp(40, 0, e);
+          chRot = lerp(0.3, 0, e);
+        }
+      } else if (intensity < 0.9) {
+        // minimal: 整段淡入，不做逐字
+        chScale = baseScale;
+        chBlur = lerp(4 * intensity, 0, progress);
+      } else {
+        // cinematic 保持阶段：带呼吸
+        chScale = baseScale;
+      }
+
+      if (chAlpha <= 0.001) {
+        charIdx++;
+        continue;
+      }
+
+      ctx.save();
+      ctx.globalAlpha = chAlpha;
+      if (chBlur > 0.1) {
+        ctx.filter = `blur(${chBlur.toFixed(1)}px)`;
+      }
+      // 文字位置 = 整体位移 + 单字位移
+      const drawX = cxCh;
+      const drawY = y + chTy;
+
+      // 缩放 + 旋转（围绕字中心）
+      if (Math.abs(chScale - 1) > 0.001 || Math.abs(chRot) > 0.001) {
+        ctx.translate(drawX, drawY);
+        ctx.rotate(chRot);
+        ctx.scale(chScale, chScale);
+        ctx.translate(-drawX, -drawY);
+      }
+
+      // 描边
+      if (ctx.lineWidth > 0) {
+        ctx.strokeText(ch, drawX, drawY);
+      }
+      ctx.fillText(ch, drawX, drawY);
+      ctx.restore();
+
+      charIdx++;
+    }
+  }
+
+  ctx.restore();
+  return { alpha: progress };
+}
+
+/** 静态文本绘制（intensity=0 时） */
+function drawPlainText(fc: FrameContext, alpha: number): { alpha: number } {
+  const { ctx, width, height, text } = fc;
+  const fontSize = Math.round(height / 18);
+  const maxWidth = width * 0.78;
+
+  ctx.save();
+  ctx.font = `bold ${fontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = wrapText(ctx, text, maxWidth);
+  const lineHeight = fontSize * 1.5;
+  const cx = width / 2;
+  const cy = height / 2;
+
   ctx.globalAlpha = alpha;
   ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
   ctx.shadowBlur = 24;
@@ -304,46 +483,51 @@ export function drawAnimatedMainText(fc: FrameContext): { alpha: number } {
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
   ctx.lineWidth = Math.max(1, fontSize / 60);
 
-  const scaledFont = `bold ${Math.round(fontSize * scale)}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
-  ctx.font = scaledFont;
-
   lines.forEach((line, i) => {
-    const y = cy - totalH / 2 + i * lineHeight + lineHeight / 2;
+    const y = cy - (lines.length * lineHeight) / 2 + i * lineHeight + lineHeight / 2;
     if (ctx.lineWidth > 0) ctx.strokeText(line, cx, y);
     ctx.fillText(line, cx, y);
   });
-
   ctx.restore();
-  return { alpha: opacity };
+  return { alpha };
 }
 
-/** 计算文字动效参数（供其他元素使用以保持同步） */
+/**
+ * 计算文字动效参数（供其他元素使用以保持同步）
+ * 三种强度的不同表现：
+ * - 0.0 : static, progress 始终 1
+ * - 0.4 : minimal, 平滑淡入淡出
+ * - 1.0 : cinematic, 强烈弹性
+ */
 export function computeTextMotion(
   segTime: number,
   segDur: number,
   intensity: number,
   _role?: SegmentRole,
 ) {
+  if (intensity <= 0.01) {
+    return { alpha: 1, scale: 1.0, ty: 0, blur: 0, opacity: 1 };
+  }
+
   let progress: number;
   let scale: number;
   let ty: number;
   let blur: number;
 
   if (segTime < T_ENTRANCE) {
-    // 入场
     const t = segTime / T_ENTRANCE;
-    const e = ease.outBack(t);
+    // cinematic 用 outBack（弹性），minimal 用 outCubic（平滑）
+    const e = intensity >= 0.9 ? ease.outBack(t) : ease.outCubic(t);
     progress = e;
-    scale = lerp(1.3, 1.0, e);
-    ty = lerp(40 * intensity, 0, e);
-    blur = lerp(8 * intensity, 0, e);
+    scale = intensity >= 0.9 ? lerp(1.25, 1.0, e) : lerp(1.05, 1.0, e);
+    ty = lerp(35 * intensity, 0, e);
+    blur = lerp(6 * intensity, 0, e);
   } else if (segTime > segDur - T_EXIT) {
-    // 出场
     const t = (segTime - (segDur - T_EXIT)) / T_EXIT;
     const e = ease.outCubic(t);
     progress = 1 - e;
     scale = lerp(1.0, 0.94, e);
-    ty = lerp(0, -30 * intensity, e);
+    ty = lerp(0, -25 * intensity, e);
     blur = 0;
   } else {
     progress = 1;
@@ -352,10 +536,8 @@ export function computeTextMotion(
     blur = 0;
   }
 
-  // 整体透明度（alpha 用于 shadow，opacity 用于 fill）
   const alpha = clamp(progress, 0, 1);
   const opacity = clamp(progress, 0, 1);
-
   return { alpha, scale, ty, blur, opacity };
 }
 
