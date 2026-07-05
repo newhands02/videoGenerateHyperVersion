@@ -6,9 +6,14 @@ import { useRouter } from 'vue-router';
 import {
   NButton, NTag, NText, NSlider, NModal, NCard,
   NSpace, NList, NListItem, NAlert, NSpin,
-  NDivider, useMessage,
+  NDivider, NProgress, useMessage,
 } from 'naive-ui';
 import { exportProject, downloadBlob } from '../lib/exporter';
+import {
+  exportVideo, downloadVideoBlob,
+  estimateVideoDuration, countAudioSegments,
+  type VideoExportResult,
+} from '../lib/videoExporter';
 import { useVoicesStore } from '../stores/voices';
 import type { ScriptSegment, SegmentRole } from '@webframes/shared-types';
 
@@ -22,6 +27,15 @@ const message = useMessage();
 const showExportDialog = ref(false);
 const exporting = ref(false);
 const exportResult = ref<{ filename: string; fileCount: number } | null>(null);
+
+// -------- 视频导出状态 --------
+const showVideoExportDialog = ref(false);
+const videoExporting = ref(false);
+const videoExportProgress = ref(0);
+const videoExportPhase = ref('');
+const videoExportResult = ref<VideoExportResult | null>(null);
+const videoEstDuration = computed(() => estimateVideoDuration(script.segments));
+const videoAudioCount = computed(() => countAudioSegments(script.segments));
 
 // -------- 时间轴状态 --------
 const pxPerSecond = ref(4);
@@ -334,6 +348,50 @@ async function handleExport() {
   }
 }
 
+// -------- 直接导出视频 --------
+async function handleExportVideo() {
+  if (script.segments.length === 0) {
+    message.warning('没有分段可导出');
+    return;
+  }
+
+  // 检查音频
+  if (videoAudioCount.value === 0) {
+    message.warning('所有分段都没有音频，导出的视频将没有声音。请先在 Step 3 合成 TTS。');
+  }
+
+  showVideoExportDialog.value = true;
+  videoExporting.value = true;
+  videoExportResult.value = null;
+  videoExportProgress.value = 0;
+  videoExportPhase.value = '准备中...';
+
+  try {
+    script.syncToProject();
+    const result = await exportVideo({
+      project: project.project,
+      segments: script.segments,
+      onProgress: (current, total, phase) => {
+        videoExportProgress.value = total > 0 ? Math.round((current / total) * 100) : 0;
+        videoExportPhase.value = phase;
+      },
+    });
+
+    downloadVideoBlob(result.blob, result.filename);
+    videoExportResult.value = result;
+    message.success(`视频已导出：${result.filename}`);
+  } catch (err: any) {
+    message.error(err.message || '视频导出失败');
+    showVideoExportDialog.value = false;
+  } finally {
+    videoExporting.value = false;
+  }
+}
+
+function closeVideoExportDialog() {
+  showVideoExportDialog.value = false;
+}
+
 // 清理
 onUnmounted(() => {
   stopPlay();
@@ -506,9 +564,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <!-- 底部操作 -->
     <div class="bottom-bar">
       <NButton @click="router.push('/step/3')">← 返回 TTS</NButton>
-      <NButton type="warning" @click="handleExport" :loading="exporting">
-        📦 导出项目
-      </NButton>
+      <NSpace>
+        <NButton type="warning" @click="handleExport" :loading="exporting">
+          📦 导出项目包
+        </NButton>
+        <NButton type="error" @click="handleExportVideo" :loading="videoExporting" :disabled="exporting">
+          🎬 导出视频
+        </NButton>
+      </NSpace>
     </div>
 
     <!-- 导出对话框 -->
@@ -543,6 +606,67 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
         <template #footer>
           <NSpace justify="end">
             <NButton @click="showExportDialog = false">关闭</NButton>
+          </NSpace>
+        </template>
+      </NCard>
+    </NModal>
+
+    <!-- 视频导出对话框 -->
+    <NModal :show="showVideoExportDialog" :mask-closable="false" style="width: 500px;">
+      <NCard :title="videoExportResult ? '视频导出完成' : '正在导出视频'" :bordered="false">
+        <!-- 导出中 -->
+        <div v-if="videoExporting" style="padding: 12px 0;">
+          <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+            <NSpin size="large" />
+          </div>
+          <NText style="display: block; text-align: center; margin-bottom: 16px;">
+            {{ videoExportPhase }}
+          </NText>
+          <NProgress
+            type="line"
+            :percentage="videoExportProgress"
+            :show-indicator="true"
+            :height="12"
+          />
+          <NAlert type="warning" :bordered="false" style="margin-top: 16px;">
+            ⚠️ 请保持此标签页在前台，切换标签页会导致录制中断！
+          </NAlert>
+          <NText depth="3" style="font-size: 12px; display: block; text-align: center; margin-top: 10px;">
+            预计时长 {{ fmt(videoEstDuration) }}（实时录制，{{ videoAudioCount }}/{{ script.segmentCount }} 段有音频）
+          </NText>
+        </div>
+
+        <!-- 导出完成 -->
+        <div v-else-if="videoExportResult">
+          <NAlert type="success" :bordered="false" style="margin-bottom: 12px;">
+            ✅ 视频已生成并开始下载！
+          </NAlert>
+          <NList bordered size="small">
+            <NListItem>
+              <NText depth="3" style="width: 80px;">文件名</NText>
+              <NText>{{ videoExportResult.filename }}</NText>
+            </NListItem>
+            <NListItem>
+              <NText depth="3" style="width: 80px;">格式</NText>
+              <NText>{{ videoExportResult.ext.toUpperCase() }}</NText>
+            </NListItem>
+            <NListItem>
+              <NText depth="3" style="width: 80px;">时长</NText>
+              <NText>{{ fmt(videoExportResult.duration) }}</NText>
+            </NListItem>
+            <NListItem>
+              <NText depth="3" style="width: 80px;">大小</NText>
+              <NText>{{ (videoExportResult.blob.size / 1024 / 1024).toFixed(1) }} MB</NText>
+            </NListItem>
+          </NList>
+          <NText depth="3" style="font-size: 12px; display: block; margin-top: 10px;">
+            如未自动下载，请检查浏览器下载设置。视频文件已保存在内存中。
+          </NText>
+        </div>
+
+        <template #footer>
+          <NSpace justify="end">
+            <NButton @click="closeVideoExportDialog">关闭</NButton>
           </NSpace>
         </template>
       </NCard>
