@@ -76,7 +76,16 @@ async function runAiSplit() {
     const { splitScript } = await import('../api/split');
     const result = await splitScript(script.rawText);
     script.setAiProposals(result.proposals);
-    message.success(`AI 分出 ${result.proposals.length} 段，请逐段采纳`);
+
+    // AI 模式：自动采纳所有 proposals 到 segments
+    if (script.splitMode === 'ai') {
+      script.clearSegments();
+      script.adoptAllProposals();
+      message.success(`AI 分出 ${result.proposals.length} 段，已自动填充（含场景画面设计）`);
+    } else {
+      // 协同模式：不自动采纳，让用户选择
+      message.success(`AI 分出 ${result.proposals.length} 段，请逐段采纳`);
+    }
   } catch (err: any) {
     const msg = err.message || 'AI 分段失败';
     script.setAiError(msg);
@@ -87,6 +96,31 @@ async function runAiSplit() {
   } finally {
     aiLoading.value = false;
   }
+}
+
+/** 可视化模式标签 */
+function visualModeLabel(mode?: string): string {
+  const map: Record<string, string> = {
+    'era-card': '年代卡',
+    'versus': '对照',
+    'formula': '公式',
+    'quote': '引言',
+    'timeline-marker': '时间线',
+    'plain': '纯文字',
+  };
+  return map[mode ?? ''] ?? '';
+}
+
+function paletteLabel(palette?: string): string {
+  const map: Record<string, string> = {
+    indigo: '靛蓝',
+    ember: '暖灰',
+    ocean: '深海',
+    forest: '青林',
+    violet: '紫韵',
+    amber: '琥珀',
+  };
+  return map[palette ?? ''] ?? '';
 }
 
 // -------- 角色标签颜色 --------
@@ -237,30 +271,39 @@ function goNext() {
         <!-- AI 结果 -->
         <div v-else-if="script.aiStatus === 'success' && script.aiProposals.length > 0" class="ai-results">
           <n-alert type="success" :show-icon="false" style="margin-bottom: 12px">
-            AI 建议分成 {{ script.aiProposals.length }} 段，已自动填充
+            AI 建议分成 {{ script.aiProposals.length }} 段，已自动填充（含场景画面设计）
           </n-alert>
-          <!-- 直接采纳所有段到 segments -->
+          <!-- 采纳后的段列表 -->
           <div class="segments-list">
             <div
-              v-for="(p, idx) in script.aiProposals"
-              :key="idx"
+              v-for="(seg, idx) in script.segments"
+              :key="seg.id"
               class="segment-card"
             >
               <div class="seg-index">{{ idx + 1 }}</div>
               <div class="seg-body">
-                <div class="seg-text">{{ p.text }}</div>
+                <div class="seg-text">{{ seg.text }}</div>
                 <div class="seg-meta">
-                  <n-tag :bordered="false" :color="{ color: roleColor(p.role) }" size="tiny">
-                    {{ roleLabel(p.role) }}
+                  <n-tag :bordered="false" :color="{ color: roleColor(seg.role) }" size="tiny">
+                    {{ roleLabel(seg.role) }}
                   </n-tag>
-                  <div class="confidence-bar">
-                    <div
-                      class="confidence-fill"
-                      :style="{ width: (p.confidence * 100) + '%', backgroundColor: confidenceColor(p.confidence) }"
-                    />
-                    <span class="confidence-label">{{ Math.round(p.confidence * 100) }}%</span>
-                  </div>
-                  <span class="seg-notes">{{ p.notes }}</span>
+                  <n-tag v-if="seg.visual && seg.visual.mode !== 'plain'" :bordered="false" type="info" size="tiny">
+                    🎬 {{ visualModeLabel(seg.visual.mode) }}
+                  </n-tag>
+                  <n-tag v-if="seg.visual?.palette" :bordered="false" size="tiny" round>
+                    {{ paletteLabel(seg.visual.palette) }}
+                  </n-tag>
+                  <span class="seg-duration">{{ Math.ceil(seg.text.length / 3.8) }}s</span>
+                  <span class="seg-chars">{{ seg.text.length }} 字</span>
+                </div>
+                <!-- visual 详情预览 -->
+                <div v-if="seg.visual && seg.visual.mode !== 'plain'" class="seg-visual-preview">
+                  <span v-if="seg.visual.mode === 'era-card'">📅 {{ seg.visual.era?.year }} · {{ seg.visual.era?.subtitle }}</span>
+                  <span v-else-if="seg.visual.mode === 'versus'">⚔️ {{ seg.visual.versus?.left.label }} {{ seg.visual.versus?.center }} {{ seg.visual.versus?.right.label }}</span>
+                  <span v-else-if="seg.visual.mode === 'formula'">📐 {{ seg.visual.formula?.title }}</span>
+                  <span v-else-if="seg.visual.mode === 'quote'">💬 {{ seg.visual.quote?.author }}</span>
+                  <span v-else-if="seg.visual.mode === 'timeline-marker'">📍 {{ seg.visual.era?.year }}</span>
+                  <span v-if="seg.visual.caption" class="seg-visual-caption">— {{ seg.visual.caption }}</span>
                 </div>
               </div>
             </div>
@@ -331,6 +374,12 @@ function goNext() {
                   <n-tag :bordered="false" :color="{ color: roleColor(p.role) }" size="tiny">
                     {{ roleLabel(p.role) }}
                   </n-tag>
+                  <n-tag v-if="p.visual && p.visual.mode !== 'plain'" :bordered="false" type="info" size="tiny">
+                    🎬 {{ visualModeLabel(p.visual.mode) }}
+                  </n-tag>
+                  <n-tag v-if="p.visual?.palette" :bordered="false" size="tiny" round>
+                    {{ paletteLabel(p.visual.palette) }}
+                  </n-tag>
                   <div class="confidence-bar small">
                     <div
                       class="confidence-fill"
@@ -338,6 +387,15 @@ function goNext() {
                     />
                     <span class="confidence-label">{{ Math.round(p.confidence * 100) }}%</span>
                   </div>
+                </div>
+                <!-- visual 详情预览 -->
+                <div v-if="p.visual && p.visual.mode !== 'plain'" class="seg-visual-preview">
+                  <span v-if="p.visual.mode === 'era-card'">📅 {{ p.visual.era?.year }} · {{ p.visual.era?.subtitle }}</span>
+                  <span v-else-if="p.visual.mode === 'versus'">⚔️ {{ p.visual.versus?.left.label }} {{ p.visual.versus?.center }} {{ p.visual.versus?.right.label }}</span>
+                  <span v-else-if="p.visual.mode === 'formula'">📐 {{ p.visual.formula?.title }}</span>
+                  <span v-else-if="p.visual.mode === 'quote'">💬 {{ p.visual.quote?.author }}</span>
+                  <span v-else-if="p.visual.mode === 'timeline-marker'">📍 {{ p.visual.era?.year }}</span>
+                  <span v-if="p.visual.caption" class="seg-visual-caption">— {{ p.visual.caption }}</span>
                 </div>
               </div>
             </div>
@@ -366,6 +424,9 @@ function goNext() {
                 <div class="seg-meta">
                   <n-tag v-if="seg.role" :bordered="false" :color="{ color: roleColor(seg.role) }" size="tiny">
                     {{ roleLabel(seg.role) }}
+                  </n-tag>
+                  <n-tag v-if="seg.visual && seg.visual.mode !== 'plain'" :bordered="false" type="info" size="tiny">
+                    🎬 {{ visualModeLabel(seg.visual.mode) }}
                   </n-tag>
                   <span class="seg-duration">{{ Math.ceil(seg.text.length / 3.8) }}s</span>
                 </div>
@@ -535,6 +596,24 @@ function goNext() {
 
 .seg-chars {
   color: #bbb;
+}
+
+.seg-visual-preview {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(99, 102, 241, 0.08);
+  border-left: 3px solid #6366f1;
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.seg-visual-caption {
+  display: block;
+  margin-top: 2px;
+  color: #9ca3af;
+  font-style: italic;
 }
 
 .seg-actions {

@@ -283,6 +283,12 @@ export const useScriptStore = defineStore('script', () => {
     clearAiState();
   }
 
+  /** 清空所有分段 */
+  function clearSegments() {
+    segments.value = [];
+    activeSegmentId.value = null;
+  }
+
   // -------- TTS 合成 --------
 
   /**
@@ -444,6 +450,7 @@ export const useScriptStore = defineStore('script', () => {
     rejectAllProposals,
     clearAiState,
     restoreOriginal,
+    clearSegments,
     synthesizeSegment,
     synthesizeAll,
     playSegment,
