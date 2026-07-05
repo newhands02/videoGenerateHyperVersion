@@ -70,8 +70,11 @@ export interface SceneVisual {
   /** formula 模式：核心概念/关键词 */
   formula?: { title: string; expression?: string };
 
-  /** quote 模式：引文来源 */
-  quote?: { author?: string; source?: string };
+  /** quote 模式：引文 + 来源 */
+  quote?: { text?: string; author?: string; source?: string };
+
+  /** timeline-marker 模式：时间线节点（复用 era 字段） */
+  timeline?: { year: string; subtitle: string };
 
   /** 底部 takeaway 一句话（15-25 字） */
   caption?: string;

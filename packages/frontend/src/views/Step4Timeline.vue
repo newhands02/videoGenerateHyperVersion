@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted, watch } from 'vue';
+import { ref, computed, onUnmounted, onMounted, watch } from 'vue';
 import { useScriptStore } from '../stores/script';
 import { useProjectStore } from '../stores/project';
 import { useRouter } from 'vue-router';
@@ -15,13 +15,120 @@ import {
   type VideoExportResult,
 } from '../lib/videoExporter';
 import { useVoicesStore } from '../stores/voices';
-import type { ScriptSegment, SegmentRole } from '@webframes/shared-types';
+import { splitScript } from '../api/split';
+import type { ScriptSegment, SegmentRole, SceneVisual, AISegmentProposal } from '@webframes/shared-types';
 
 const script = useScriptStore();
 const project = useProjectStore();
 const voices = useVoicesStore();
 const router = useRouter();
 const message = useMessage();
+
+// -------- Phase E: 自动补全 visual --------
+// 如果 segment 已有 visual 跳过，否则调用 AI 给所有段一起生成
+const enrichingVisuals = ref(false);
+const visualEnriched = ref(false);
+
+async function enrichVisualsForExistingSegments() {
+  if (enrichingVisuals.value) return;
+  if (script.segments.length === 0) return;
+  // 检查是否所有段都已有 visual
+  const needEnrich = script.segments.filter(s => !s.visual || s.visual.mode === 'plain');
+  if (needEnrich.length === 0) {
+    visualEnriched.value = true;
+    return;
+  }
+  enrichingVisuals.value = true;
+  try {
+    // 拼接所有段文本，让 LLM 一次性补全
+    const combined = script.segments.map(s => s.text).join('\n');
+    const result = await splitScript(combined);
+    // 按数量对应回 segments（按 text 前缀匹配）
+    const proposalByPrefix = new Map<string, AISegmentProposal>();
+    result.proposals.forEach(p => {
+      proposalByPrefix.set(p.text.slice(0, 12), p);
+    });
+    let matched = 0;
+    script.segments.forEach(seg => {
+      if (seg.visual && seg.visual.mode !== 'plain') return;
+      const key = seg.text.slice(0, 12);
+      const p = proposalByPrefix.get(key);
+      if (p && p.visual) {
+        seg.visual = p.visual;
+        matched++;
+      } else {
+        // 兜底：用本地启发式生成最简 visual
+        seg.visual = inferVisualFromText(seg.text, seg.role);
+      }
+    });
+    visualEnriched.value = true;
+    message.success(`已为 ${matched} 段生成场景画面`);
+  } catch (err: any) {
+    message.warning('AI 补全场景画面失败，使用本地推断');
+    script.segments.forEach(seg => {
+      if (!seg.visual || seg.visual.mode === 'plain') {
+        seg.visual = inferVisualFromText(seg.text, seg.role);
+      }
+    });
+  } finally {
+    enrichingVisuals.value = false;
+  }
+}
+
+/** 本地启发式：根据文本和角色推断 visual，不依赖 LLM */
+function inferVisualFromText(text: string, role?: SegmentRole): SceneVisual {
+  const t = text.trim();
+  // 数字 + 人物 / 年代 → era-card
+  const yearMatch = t.match(/(\d{2,4})\s*年/);
+  if (yearMatch) {
+    return {
+      mode: 'era-card',
+      palette: 'indigo',
+      era: { year: yearMatch[1], subtitle: t.slice(0, 18).replace(yearMatch[0], '').trim() || role || '' },
+      caption: t.slice(-30),
+    };
+  }
+  // 含 "vs" / "比" / "PK" / "对" → versus
+  if (/(.+?)\s*(vs\.?|对比|PK|对话|比较|还是)\s*(.+)/i.test(t)) {
+    const m = t.match(/(.+?)\s*(vs\.?|对比|PK|对话|比较|还是)\s*(.+)/i);
+    if (m) {
+      return {
+        mode: 'versus',
+        palette: 'ocean',
+        versus: { left: { label: m[1].trim().slice(0, 6), tone: 'warm' }, right: { label: m[3].trim().slice(0, 6), tone: 'cool' }, center: m[2] },
+        caption: t.slice(-30),
+      };
+    }
+  }
+  // 含冒号解释 / "是" / "叫做" → formula
+  if (/(什么是|叫做|意味着|等于|:|：)/.test(t)) {
+    return {
+      mode: 'formula',
+      palette: 'amber',
+      formula: { title: t.split(/[:：]/)[0].trim().slice(0, 8) || '概念', expression: t.split(/[:：]/)[1]?.trim().slice(0, 20) || t.slice(0, 20) },
+      caption: t.slice(-30),
+    };
+  }
+  // hook/climax 高优先级段 → quote
+  if (role === 'hook' || role === 'climax') {
+    return {
+      mode: 'quote',
+      palette: 'violet',
+      quote: { text: t, author: role === 'hook' ? '钩子' : '高潮' },
+      caption: t.slice(-30),
+    };
+  }
+  // 默认 plain
+  return {
+    mode: 'plain',
+    palette: 'indigo',
+    caption: t.slice(-30),
+  };
+}
+
+onMounted(() => {
+  enrichVisualsForExistingSegments();
+});
 
 // -------- 导出状态 --------
 const showExportDialog = ref(false);
@@ -553,6 +660,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <div class="toolbar">
       <NButton size="small" @click="togglePlay">
         {{ isPlaying ? '⏸ 暂停' : '▶ 播放' }}
+      </NButton>
+      <NButton
+        size="small"
+        :loading="enrichingVisuals"
+        :disabled="script.segments.length === 0"
+        @click="enrichVisualsForExistingSegments"
+        style="margin-left: 8px"
+      >
+        🎨 {{ visualEnriched ? '重新生成视觉' : 'AI 生成场景画面' }}
       </NButton>
       <NText depth="3" style="margin-left: 12px; font-size: 13px;">
         播放头：{{ fmt(playheadSec) }}
