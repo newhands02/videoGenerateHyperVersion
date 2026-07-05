@@ -447,6 +447,19 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 
     <!-- ===== 视频预览面板 ===== -->
     <div class="preview-panel" :style="{ background: sceneBg(currentScene) }">
+      <!-- 调试条：显示当前段的 visual.mode（生产环境可去掉） -->
+      <div v-if="currentScene" class="preview-debug-bar">
+        <NTag size="tiny" :bordered="false" type="warning">
+          {{ currentScene.role ?? 'no-role' }}
+        </NTag>
+        <NTag size="tiny" :bordered="false" :type="currentScene.visual ? 'success' : 'error'">
+          🎬 {{ currentScene.visual?.mode ?? 'NO VISUAL' }}
+        </NTag>
+        <NTag v-if="currentScene.visual?.palette" size="tiny" :bordered="false" type="info">
+          {{ currentScene.visual.palette }}
+        </NTag>
+      </div>
+
       <div class="preview-content">
         <!-- Phase E: 根据 visual.mode 显示不同场景画面 -->
         <template v-if="currentScene?.visual && currentScene.visual.mode !== 'plain'">
@@ -982,6 +995,22 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
   font-size: 18px;
   color: #fff;
   line-height: 1.5;
+}
+
+/* 调试条：显示当前段的 visual 状态（顶部小条） */
+.preview-debug-bar {
+  position: absolute;
+  top: 50px;
+  left: 12px;
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 11px;
 }
 
 .preview-badge {
