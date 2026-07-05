@@ -100,21 +100,44 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 function lerpColor(c1: string, c2: string, t: number): string {
-  const p1 = parseHexColor(c1);
-  const p2 = parseHexColor(c2);
+  const p1 = parseColor(c1);
+  const p2 = parseColor(c2);
   const r = Math.round(lerp(p1[0], p2[0], t));
   const g = Math.round(lerp(p1[1], p2[1], t));
   const b = Math.round(lerp(p1[2], p2[2], t));
   return `rgb(${r},${g},${b})`;
 }
 
-function parseHexColor(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
-  return [
-    parseInt(h.slice(0, 2), 16),
-    parseInt(h.slice(2, 4), 16),
-    parseInt(h.slice(4, 6), 16),
-  ];
+/**
+ * 解析颜色字符串为 [r, g, b]（0-255）。
+ * 支持 #hex、#rgb、rgb(r,g,b)、rgba(r,g,b,a) 格式。
+ * 解析失败时返回 [0,0,0]（黑色），避免 NaN 传播。
+ */
+function parseColor(color: string): [number, number, number] {
+  const c = color.trim();
+  // hex 格式: #rgb 或 #rrggbb
+  if (c.startsWith('#')) {
+    const h = c.slice(1);
+    if (h.length === 3) {
+      return [
+        parseInt(h[0] + h[0], 16),
+        parseInt(h[1] + h[1], 16),
+        parseInt(h[2] + h[2], 16),
+      ];
+    }
+    return [
+      parseInt(h.slice(0, 2), 16) || 0,
+      parseInt(h.slice(2, 4), 16) || 0,
+      parseInt(h.slice(4, 6), 16) || 0,
+    ];
+  }
+  // rgb / rgba 格式
+  const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (m) {
+    return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3])];
+  }
+  // 兜底：黑色，避免 NaN
+  return [0, 0, 0];
 }
 
 function roundRectPath(
@@ -235,8 +258,8 @@ export function drawKineticBackground(fc: FrameContext) {
   ctx.fillRect(0, 0, width, height);
 }
 
-function hexToRgba(hex: string, a: number): string {
-  const [r, g, b] = parseHexColor(hex);
+function hexToRgba(color: string, a: number): string {
+  const [r, g, b] = parseColor(color);
   return `rgba(${r},${g},${b},${a})`;
 }
 
