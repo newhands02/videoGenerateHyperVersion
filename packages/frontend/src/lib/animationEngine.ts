@@ -962,21 +962,43 @@ export function drawSceneVisual(fc: FrameContext) {
 
   switch (visual.mode) {
     case 'era-card':
-      drawEraCard(fc, alpha);
+      if (visual.era?.year) {
+        drawEraCard(fc, alpha);
+      } else {
+        drawVisualPlaceholder(fc, alpha, '年代卡', '缺少 year 字段');
+      }
       break;
     case 'versus':
-      drawVersus(fc, alpha);
+      if (visual.versus?.left?.label && visual.versus?.right?.label) {
+        drawVersus(fc, alpha);
+      } else {
+        drawVisualPlaceholder(fc, alpha, '对照式', '缺少 left/right label');
+      }
       break;
     case 'formula':
-      drawFormula(fc, alpha);
+      if (visual.formula?.title || visual.formula?.expression) {
+        drawFormula(fc, alpha);
+      } else {
+        drawVisualPlaceholder(fc, alpha, '公式卡', '缺少 title/expression');
+      }
       break;
     case 'quote':
-      drawQuote(fc, alpha);
+      if (visual.quote?.text) {
+        drawQuote(fc, alpha);
+      } else {
+        drawVisualPlaceholder(fc, alpha, '引言卡', '缺少 text');
+      }
       break;
     case 'timeline-marker':
-      drawTimelineMarker(fc, alpha);
+      if (visual.timeline?.year) {
+        drawTimelineMarker(fc, alpha);
+      } else {
+        drawVisualPlaceholder(fc, alpha, '时间线', '缺少 year');
+      }
       break;
+    case 'plain':
     default:
+      // visual.mode === 'plain' 或未知：走原有主文字路径（renderFrame 已分流）
       drawAnimatedMainText(fc);
       break;
   }
@@ -985,6 +1007,49 @@ export function drawSceneVisual(fc: FrameContext) {
   if (visual.caption) {
     drawSceneCaption(fc, visual.caption, alpha);
   }
+}
+
+/**
+ * 当 LLM 返回了 visual.mode 但缺少必要子字段时的占位画面
+ * 比 fallback 到 drawAnimatedMainText 干净，避免和字幕条叠加
+ */
+function drawVisualPlaceholder(fc: FrameContext, alpha: number, title: string, hint: string) {
+  const { ctx, width, height, intensity } = fc;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  const cx = width / 2;
+  const cy = height / 2;
+
+  // 半透明白色卡片
+  const cardW = width * 0.5;
+  const cardH = height * 0.22;
+  const cardX = cx - cardW / 2;
+  const cardY = cy - cardH / 2;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.lineWidth = 2;
+  roundRectPath(ctx, cardX, cardY, cardW, cardH, 16);
+  ctx.fill();
+  ctx.stroke();
+
+  // 模式名
+  const titleSize = Math.max(28, Math.min(width, height) * 0.05);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold ${titleSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+  ctx.shadowBlur = 8;
+  ctx.fillText(`🎬 ${title}`, cx, cy - titleSize * 0.3);
+
+  // 提示
+  const hintSize = Math.max(14, Math.min(width, height) * 0.022);
+  ctx.font = `${hintSize}px sans-serif`;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+  ctx.fillText(hint, cx, cy + titleSize * 0.5);
+
+  ctx.restore();
 }
 
 /**
@@ -1393,17 +1458,20 @@ export function renderFrame(fc: FrameContext, totalDuration: number, currentTime
   // 2. 角色装饰
   drawRoleDecorations(fc);
 
-  // 3. 字幕条（在文字下方）
-  const T_SUBTITLE_DELAY = 0.3;
-  const T_SUBTITLE_END = fc.segDur - T_EXIT - 0.1;
-  const reveal = clamp(
-    (fc.segTime - T_SUBTITLE_DELAY) / Math.max(0.1, T_SUBTITLE_END - T_SUBTITLE_DELAY),
-    0, 1,
-  );
-  drawAnimatedSubtitle(fc, reveal);
+  // 3. 字幕条（仅在 plain 模式显示，避免和场景画面里的文字叠加）
+  const useSceneVisual = fc.visual && fc.visual.mode !== 'plain';
+  if (!useSceneVisual) {
+    const T_SUBTITLE_DELAY = 0.3;
+    const T_SUBTITLE_END = fc.segDur - T_EXIT - 0.1;
+    const reveal = clamp(
+      (fc.segTime - T_SUBTITLE_DELAY) / Math.max(0.1, T_SUBTITLE_END - T_SUBTITLE_DELAY),
+      0, 1,
+    );
+    drawAnimatedSubtitle(fc, reveal);
+  }
 
   // 4. 主画面：有 visual 时用场景画面，否则走纯文字
-  if (fc.visual && fc.visual.mode !== 'plain') {
+  if (useSceneVisual) {
     drawSceneVisual(fc);
   } else {
     drawAnimatedMainText(fc);
