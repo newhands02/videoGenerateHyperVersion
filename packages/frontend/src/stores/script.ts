@@ -9,6 +9,7 @@ import type {
   ScriptSegment,
   SegmentRole,
   SegmentSource,
+  SceneVisual,
   AISegmentProposal,
   TTSEngine,
   TtsSpeed,
@@ -51,6 +52,7 @@ function createSegment(text: string, opts: Partial<ScriptSegment> = {}): ScriptS
     tts: opts.tts ?? defaultTts(),
     audioDuration: opts.audioDuration,
     audioUrl: opts.audioUrl,
+    visual: opts.visual,
   }) as ScriptSegment;
 }
 
@@ -239,6 +241,7 @@ export const useScriptStore = defineStore('script', () => {
       role: p.role,
       confidence: p.confidence,
       source: 'ai',
+      visual: p.visual,
     });
     const insertAt = adoptedIndexes.value.size - 1;
     segments.value.splice(insertAt, 0, seg);

@@ -10,7 +10,7 @@
  * 调用方按帧传入 FrameContext，模块本身无状态
  */
 
-import type { ScriptSegment, SegmentRole } from '@webframes/shared-types';
+import type { ScriptSegment, SegmentRole, SceneVisual } from '@webframes/shared-types';
 
 // ==================== 类型 ====================
 
@@ -36,6 +36,8 @@ export interface FrameContext {
   transitionProgress?: number;
   /** 上一段的渐变色（用于段间过渡） */
   prevColors?: [string, string];
+  /** 场景视觉描述（由 LLM 生成，驱动场景画面渲染） */
+  visual?: SceneVisual;
 }
 
 // ==================== 常量 ====================
@@ -54,6 +56,16 @@ const SCENE_GRADIENTS: Record<string, [string, string]> = {
   transition: ['#2c3e50', '#3498db'],
 };
 const DEFAULT_GRADIENT: [string, string] = ['#1a1a2e', '#16213e'];
+
+/** Phase E: palette → 渐变色映射（由 LLM 选择，比 role 更精细） */
+const PALETTE_GRADIENTS: Record<string, [string, string]> = {
+  indigo:  ['#0f0c29', '#302b63'],
+  ember:   ['#1c1c1c', '#3a3a3a'],
+  ocean:   ['#1a2a6c', '#0d4f5c'],
+  forest:  ['#134e5e', '#71b280'],
+  violet:  ['#2c1810', '#6b2d5c'],
+  amber:   ['#f12711', '#f5af19'],
+};
 
 // ==================== 工具函数 ====================
 
@@ -179,7 +191,11 @@ function wrapText(
   return lines;
 }
 
-export function getSceneGradient(role?: SegmentRole): [string, string] {
+export function getSceneGradient(role?: SegmentRole, visual?: SceneVisual): [string, string] {
+  // Phase E: 优先使用 visual.palette（LLM 精选配色）
+  if (visual?.palette && PALETTE_GRADIENTS[visual.palette]) {
+    return PALETTE_GRADIENTS[visual.palette];
+  }
   return (role && SCENE_GRADIENTS[role]) || DEFAULT_GRADIENT;
 }
 
@@ -193,13 +209,14 @@ export function getSceneGradient(role?: SegmentRole): [string, string] {
  * - 顶部到底部的轻微 vignette
  */
 export function drawKineticBackground(fc: FrameContext) {
-  const { ctx, width, height, segTime, segIndex, seed, intensity, transitionProgress, prevColors } = fc;
+  const { ctx, width, height, segTime, segIndex, seed, intensity, transitionProgress, prevColors, role, visual } = fc;
+  const currentGradient = getSceneGradient(role, visual);
   const colors = transitionProgress !== undefined && prevColors
     ? [
-        lerpColor(prevColors[0], getSceneGradient(fc.role)[0], transitionProgress),
-        lerpColor(prevColors[1], getSceneGradient(fc.role)[1], transitionProgress),
+        lerpColor(prevColors[0], currentGradient[0], transitionProgress),
+        lerpColor(prevColors[1], currentGradient[1], transitionProgress),
       ] as [string, string]
-    : getSceneGradient(fc.role);
+    : currentGradient;
 
   // 基础渐变
   const baseGrad = ctx.createLinearGradient(0, 0, width * 0.5, height);
@@ -924,10 +941,448 @@ export function drawTransitionOverlay(
   ctx.restore();
 }
 
+// ==================== 8. 场景视觉（Phase E） ====================
+
+/**
+ * 场景视觉主入口：根据 visual.mode 分发到具体渲染函数
+ * 每个 mode 都有独特的排版方式，让画面"根据文字内容生成"
+ */
+export function drawSceneVisual(fc: FrameContext) {
+  const { visual, segTime, segDur, intensity } = fc;
+  if (!visual) return;
+
+  // 入场/出场 alpha（与主文字动画同步）
+  let alpha = 1;
+  if (segTime < T_ENTRANCE) {
+    alpha = ease.outCubic(segTime / T_ENTRANCE);
+  } else if (segTime > segDur - T_EXIT) {
+    alpha = 1 - ease.outCubic((segTime - (segDur - T_EXIT)) / T_EXIT);
+  }
+  if (alpha <= 0.001) return;
+
+  switch (visual.mode) {
+    case 'era-card':
+      drawEraCard(fc, alpha);
+      break;
+    case 'versus':
+      drawVersus(fc, alpha);
+      break;
+    case 'formula':
+      drawFormula(fc, alpha);
+      break;
+    case 'quote':
+      drawQuote(fc, alpha);
+      break;
+    case 'timeline-marker':
+      drawTimelineMarker(fc, alpha);
+      break;
+    default:
+      drawAnimatedMainText(fc);
+      break;
+  }
+
+  // 底部 caption（如果有）
+  if (visual.caption) {
+    drawSceneCaption(fc, visual.caption, alpha);
+  }
+}
+
+/**
+ * era-card: 年代卡片
+ * 画面中央显示一个巨大的年份，下方是人物/事件名
+ * 适合"1950 · 阿兰·图灵"这种里程碑式画面
+ */
+function drawEraCard(fc: FrameContext, alpha: number) {
+  const { ctx, width, height, segTime, intensity, visual } = fc;
+  if (!visual?.era) { drawAnimatedMainText(fc); return; }
+
+  const cx = width / 2;
+  const cy = height / 2;
+
+  // 年份：超大字号，居中偏上
+  const yearFontSize = Math.round(height / 5.5);
+  const subtitleFontSize = Math.round(height / 22);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // 入场动画：从下方滑入 + 缩放
+  let slideY = 0;
+  let scale = 1.0;
+  if (segTime < T_ENTRANCE && intensity > 0.1) {
+    const t = segTime / T_ENTRANCE;
+    const e = ease.outBack(t);
+    slideY = lerp(60, 0, e);
+    scale = lerp(0.85, 1.0, e);
+  }
+
+  ctx.translate(cx, cy + slideY);
+  ctx.scale(scale, scale);
+
+  // 年份描边+填充
+  ctx.font = `900 ${yearFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+  ctx.shadowBlur = 30;
+  ctx.shadowOffsetY = 6;
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.lineWidth = Math.max(2, yearFontSize / 50);
+  if (ctx.lineWidth > 0) ctx.strokeText(visual.era.year, 0, -yearFontSize * 0.35);
+  ctx.fillText(visual.era.year, 0, -yearFontSize * 0.35);
+
+  // 分隔线
+  ctx.shadowBlur = 10;
+  const lineW = yearFontSize * 1.8;
+  const lineGrad = ctx.createLinearGradient(-lineW / 2, 0, lineW / 2, 0);
+  lineGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+  lineGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
+  lineGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = lineGrad;
+  ctx.fillRect(-lineW / 2, yearFontSize * 0.05, lineW, 2);
+
+  // 副标题（人物/事件名）
+  ctx.font = `400 ${subtitleFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.fillText(visual.era.subtitle, 0, yearFontSize * 0.25);
+
+  ctx.restore();
+}
+
+/**
+ * versus: 左右对照式
+ * 画面分为左右两半，各放一个标签，中间有连接词
+ * 适合"机器 vs 人类"、"莎士比亚 vs 词频统计"
+ */
+function drawVersus(fc: FrameContext, alpha: number) {
+  const { ctx, width, height, segTime, intensity, visual } = fc;
+  if (!visual?.versus) { drawAnimatedMainText(fc); return; }
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const labelFontSize = Math.round(height / 12);
+  const centerFontSize = Math.round(height / 20);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // 入场：左右两边分别从外侧滑入
+  let leftX = width * 0.25;
+  let rightX = width * 0.75;
+  let centerAlpha = 1;
+
+  if (segTime < T_ENTRANCE && intensity > 0.1) {
+    const t = segTime / T_ENTRANCE;
+    const e = ease.outCubic(t);
+    leftX = lerp(width * 0.05, width * 0.25, e);
+    rightX = lerp(width * 0.95, width * 0.75, e);
+    centerAlpha = t > 0.6 ? ease.outCubic((t - 0.6) / 0.4) : 0;
+  }
+
+  const { left, right, center = 'vs' } = visual.versus;
+
+  // 左侧标签
+  ctx.font = `bold ${labelFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+  ctx.shadowBlur = 16;
+  ctx.shadowOffsetY = 3;
+
+  // 左侧用冷色调（蓝/青），右侧用暖色调（橙/红）
+  const leftColor = left.tone === 'warm' ? 'rgba(255, 200, 150, 0.95)' : 'rgba(150, 200, 255, 0.95)';
+  const rightColor = right.tone === 'warm' ? 'rgba(255, 200, 150, 0.95)' : 'rgba(150, 200, 255, 0.95)';
+
+  ctx.fillStyle = leftColor;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.lineWidth = Math.max(1, labelFontSize / 60);
+
+  const leftLabel = wrapText(ctx, left.label, width * 0.35);
+  leftLabel.forEach((line, i) => {
+    const ly = cy - (leftLabel.length - 1) * labelFontSize * 0.75 + i * labelFontSize * 1.5;
+    if (ctx.lineWidth > 0) ctx.strokeText(line, leftX, ly);
+    ctx.fillText(line, leftX, ly);
+  });
+
+  // 右侧标签
+  ctx.fillStyle = rightColor;
+  const rightLabel = wrapText(ctx, right.label, width * 0.35);
+  rightLabel.forEach((line, i) => {
+    const ly = cy - (rightLabel.length - 1) * labelFontSize * 0.75 + i * labelFontSize * 1.5;
+    if (ctx.lineWidth > 0) ctx.strokeText(line, rightX, ly);
+    ctx.fillText(line, rightX, ly);
+  });
+
+  // 中间连接词
+  if (centerAlpha > 0.01) {
+    ctx.globalAlpha = alpha * centerAlpha;
+    ctx.font = `300 ${centerFontSize}px "PingFang SC", "Microsoft YaHei", sans-serif`;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.shadowBlur = 8;
+    ctx.fillText(center, cx, cy);
+  }
+
+  // 中间竖线分隔
+  ctx.globalAlpha = alpha * 0.15;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - height * 0.15);
+  ctx.lineTo(cx, cy + height * 0.15);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/**
+ * formula: 概念/公式卡片
+ * 顶部显示概念名（大字），下方显示公式或简短描述（等宽字体）
+ */
+function drawFormula(fc: FrameContext, alpha: number) {
+  const { ctx, width, height, segTime, intensity, visual } = fc;
+  if (!visual?.formula) { drawAnimatedMainText(fc); return; }
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const titleFontSize = Math.round(height / 11);
+  const exprFontSize = Math.round(height / 26);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // 入场：缩放+淡入
+  let scale = 1.0;
+  if (segTime < T_ENTRANCE && intensity > 0.1) {
+    const t = segTime / T_ENTRANCE;
+    scale = lerp(0.9, 1.0, ease.outBack(t));
+  }
+
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  // 背景卡片（半透明圆角矩形）
+  const cardW = width * 0.6;
+  const cardH = height * 0.3;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+  roundRectPath(ctx, -cardW / 2, -cardH / 2, cardW, cardH, 16);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 1;
+  roundRectPath(ctx, -cardW / 2, -cardH / 2, cardW, cardH, 16);
+  ctx.stroke();
+
+  // 概念名
+  ctx.font = `bold ${titleFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(visual.formula.title, 0, -cardH * 0.15);
+
+  // 公式/描述（等宽字体）
+  if (visual.formula.expression) {
+    ctx.font = `400 ${exprFontSize}px "JetBrains Mono", "Fira Code", "Consolas", monospace`;
+    ctx.fillStyle = 'rgba(180, 220, 255, 0.9)';
+    ctx.shadowBlur = 6;
+    ctx.fillText(visual.formula.expression, 0, cardH * 0.2);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * quote: 引文卡片
+ * 居中大引号 + 引文文字 + 底部作者署名
+ */
+function drawQuote(fc: FrameContext, alpha: number) {
+  const { ctx, width, height, segTime, intensity, visual, text } = fc;
+  if (!visual?.quote) { drawAnimatedMainText(fc); return; }
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const quoteFontSize = Math.round(height / 16);
+  const authorFontSize = Math.round(height / 30);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // 入场：从下方淡入
+  let slideY = 0;
+  if (segTime < T_ENTRANCE && intensity > 0.1) {
+    const t = segTime / T_ENTRANCE;
+    slideY = lerp(30, 0, ease.outCubic(t));
+  }
+
+  // 巨大引号（装饰性）
+  const quoteMarkSize = Math.round(height / 6);
+  ctx.font = `700 ${quoteMarkSize}px Georgia, serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.fillText('\u201C', cx - width * 0.28, cy - height * 0.12 + slideY);
+
+  // 引文文字（使用段文字，不是 visual.caption）
+  ctx.font = `500 ${quoteFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", serif`;
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  const lines = wrapText(ctx, text, width * 0.7);
+  const lineHeight = quoteFontSize * 1.6;
+  lines.forEach((line, i) => {
+    const ly = cy - (lines.length - 1) * lineHeight * 0.5 + i * lineHeight + slideY;
+    ctx.fillText(line, cx, ly);
+  });
+
+  // 作者署名
+  if (visual.quote.author) {
+    const authorY = cy + lines.length * lineHeight * 0.5 + authorFontSize * 1.2 + slideY;
+    ctx.font = `400 ${authorFontSize}px "PingFang SC", "Microsoft YaHei", sans-serif`;
+    ctx.fillStyle = 'rgba(200, 200, 200, 0.7)';
+    ctx.shadowBlur = 4;
+    const authorText = visual.quote.source
+      ? `\u2014 ${visual.quote.author} · ${visual.quote.source}`
+      : `\u2014 ${visual.quote.author}`;
+    ctx.fillText(authorText, cx, authorY);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * timeline-marker: 时间线节点
+ * 左侧一个时间线竖线 + 圆点，右侧显示节点名和描述
+ */
+function drawTimelineMarker(fc: FrameContext, alpha: number) {
+  const { ctx, width, height, segTime, intensity, visual } = fc;
+  if (!visual?.era) { drawAnimatedMainText(fc); return; }
+
+  const nodeX = width * 0.3;
+  const textX = width * 0.42;
+  const cy = height / 2;
+  const yearFontSize = Math.round(height / 14);
+  const subFontSize = Math.round(height / 28);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // 入场：圆点先出现，然后文字滑入
+  let dotScale = 1.0;
+  let textSlideX = 0;
+  if (segTime < T_ENTRANCE && intensity > 0.1) {
+    const t = segTime / T_ENTRANCE;
+    if (t < 0.4) {
+      dotScale = ease.outBack(t / 0.4);
+      textSlideX = 40;
+    } else {
+      dotScale = 1.0;
+      textSlideX = lerp(40, 0, ease.outCubic((t - 0.4) / 0.6));
+    }
+  }
+
+  // 竖线（时间线主体）
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(nodeX, height * 0.2);
+  ctx.lineTo(nodeX, height * 0.8);
+  ctx.stroke();
+
+  // 圆点（脉冲效果）
+  const pulse = 1 + 0.1 * Math.sin(segTime * 3);
+  const dotR = Math.round(height / 50) * dotScale * pulse;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+  ctx.shadowBlur = 20;
+  ctx.beginPath();
+  ctx.arc(nodeX, cy, dotR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // 年份/节点名
+  ctx.font = `bold ${yearFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(visual.era.year, textX + textSlideX, cy - yearFontSize * 0.3);
+
+  // 副标题
+  ctx.font = `400 ${subFontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.fillStyle = 'rgba(200, 200, 200, 0.8)';
+  ctx.shadowBlur = 4;
+  ctx.fillText(visual.era.subtitle, textX + textSlideX, cy + yearFontSize * 0.5);
+
+  ctx.restore();
+}
+
+/**
+ * 底部 caption（不同于字幕条，这是 visual 提供的核心观点一句话）
+ * 在画面底部中央，带半透明背景条
+ */
+function drawSceneCaption(fc: FrameContext, caption: string, alpha: number) {
+  const { ctx, width, height, segTime, segDur } = fc;
+
+  // caption 在段中段才出现（避免与入场动画冲突）
+  const CAPTION_DELAY = T_ENTRANCE + 0.2;
+  const CAPTION_END = segDur - T_EXIT;
+  let capAlpha = 0;
+  if (segTime < CAPTION_DELAY) {
+    capAlpha = 0;
+  } else if (segTime > CAPTION_END) {
+    capAlpha = alpha * (1 - (segTime - CAPTION_END) / T_EXIT);
+  } else {
+    const t = (segTime - CAPTION_DELAY) / 0.4;
+    capAlpha = alpha * ease.outCubic(Math.min(t, 1));
+  }
+  if (capAlpha <= 0.001) return;
+
+  const fontSize = Math.round(height / 32);
+  const paddingH = fontSize * 1.2;
+  const paddingV = fontSize * 0.6;
+  const maxWidth = width * 0.7;
+
+  ctx.save();
+  ctx.globalAlpha = capAlpha;
+  ctx.font = `500 ${fontSize}px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const lines = wrapText(ctx, caption, maxWidth);
+  const lineHeight = fontSize * 1.4;
+  const barW = Math.min(width * 0.8, maxWidth + paddingH * 2);
+  const barH = lines.length * lineHeight + paddingV * 2;
+  const barX = (width - barW) / 2;
+  const barY = height * 0.82;
+
+  // 背景条
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  roundRectPath(ctx, barX, barY, barW, barH, fontSize * 0.3);
+  ctx.fill();
+
+  // 左侧强调条
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.fillRect(barX, barY + paddingV * 0.5, 3, barH - paddingV);
+
+  // 文字
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+  ctx.shadowBlur = 4;
+  lines.forEach((line, i) => {
+    ctx.fillText(line, width / 2, barY + paddingV + lineHeight * (i + 0.5));
+  });
+
+  ctx.restore();
+}
+
 // ==================== 主渲染入口 ====================
 
 /**
  * 单帧主渲染：把上面所有层组合起来
+ * Phase E: 当 visual.mode != 'plain' 时，用 drawSceneVisual 替代 drawAnimatedMainText
  */
 export function renderFrame(fc: FrameContext, totalDuration: number, currentTime: number) {
   const { ctx, width, height } = fc;
@@ -939,7 +1394,6 @@ export function renderFrame(fc: FrameContext, totalDuration: number, currentTime
   drawRoleDecorations(fc);
 
   // 3. 字幕条（在文字下方）
-  // 计算字幕文字显现进度：从入场到出场均匀铺开
   const T_SUBTITLE_DELAY = 0.3;
   const T_SUBTITLE_END = fc.segDur - T_EXIT - 0.1;
   const reveal = clamp(
@@ -948,11 +1402,12 @@ export function renderFrame(fc: FrameContext, totalDuration: number, currentTime
   );
   drawAnimatedSubtitle(fc, reveal);
 
-  // 4. 主文字
-  drawAnimatedMainText(fc);
-
-  // 5. 段标签
-  // （index/total 由调用方传入 drawSegmentBadge）
+  // 4. 主画面：有 visual 时用场景画面，否则走纯文字
+  if (fc.visual && fc.visual.mode !== 'plain') {
+    drawSceneVisual(fc);
+  } else {
+    drawAnimatedMainText(fc);
+  }
 }
 
 // ==================== 辅助：根据段文本生成稳定 seed ====================

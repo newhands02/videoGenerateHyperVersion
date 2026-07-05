@@ -98,8 +98,21 @@ const sceneBackgrounds: Record<string, string> = {
   transition: 'linear-gradient(135deg, #2c3e50, #3498db)',
 };
 
+const paletteBackgrounds: Record<string, string> = {
+  indigo:  'linear-gradient(135deg, #0f0c29, #302b63)',
+  ember:   'linear-gradient(135deg, #1c1c1c, #3a3a3a)',
+  ocean:   'linear-gradient(135deg, #1a2a6c, #0d4f5c)',
+  forest:  'linear-gradient(135deg, #134e5e, #71b280)',
+  violet:  'linear-gradient(135deg, #2c1810, #6b2d5c)',
+  amber:   'linear-gradient(135deg, #f12711, #f5af19)',
+};
+
 function sceneBg(seg: ScriptSegment | null): string {
   if (!seg) return 'linear-gradient(135deg, #1a1a2e, #16213e)';
+  // Phase E: 优先使用 visual.palette
+  if (seg.visual?.palette && paletteBackgrounds[seg.visual.palette]) {
+    return paletteBackgrounds[seg.visual.palette];
+  }
   return sceneBackgrounds[seg.role ?? ''] ?? 'linear-gradient(135deg, #1a1a2e, #16213e)';
 }
 
@@ -435,12 +448,66 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
     <!-- ===== 视频预览面板 ===== -->
     <div class="preview-panel" :style="{ background: sceneBg(currentScene) }">
       <div class="preview-content">
-        <div class="preview-scene-text" v-if="currentScene">
+        <!-- Phase E: 根据 visual.mode 显示不同场景画面 -->
+        <template v-if="currentScene?.visual && currentScene.visual.mode !== 'plain'">
+          <!-- era-card: 年代卡片 -->
+          <div v-if="currentScene.visual.mode === 'era-card'" class="scene-era-card">
+            <div class="era-year">{{ currentScene.visual.era?.year }}</div>
+            <div class="era-divider"></div>
+            <div class="era-subtitle">{{ currentScene.visual.era?.subtitle }}</div>
+          </div>
+
+          <!-- versus: 左右对照 -->
+          <div v-else-if="currentScene.visual.mode === 'versus'" class="scene-versus">
+            <div class="versus-side" :class="{ warm: currentScene.visual.versus?.left.tone === 'warm' }">
+              {{ currentScene.visual.versus?.left.label }}
+            </div>
+            <div class="versus-center">{{ currentScene.visual.versus?.center ?? 'vs' }}</div>
+            <div class="versus-side" :class="{ warm: currentScene.visual.versus?.right.tone === 'warm' }">
+              {{ currentScene.visual.versus?.right.label }}
+            </div>
+          </div>
+
+          <!-- formula: 概念卡片 -->
+          <div v-else-if="currentScene.visual.mode === 'formula'" class="scene-formula">
+            <div class="formula-title">{{ currentScene.visual.formula?.title }}</div>
+            <div v-if="currentScene.visual.formula?.expression" class="formula-expr">
+              {{ currentScene.visual.formula.expression }}
+            </div>
+          </div>
+
+          <!-- quote: 引文卡片 -->
+          <div v-else-if="currentScene.visual.mode === 'quote'" class="scene-quote">
+            <div class="quote-mark">&ldquo;</div>
+            <div class="quote-text">{{ currentScene.text }}</div>
+            <div v-if="currentScene.visual.quote?.author" class="quote-author">
+              &mdash; {{ currentScene.visual.quote.author }}
+              <span v-if="currentScene.visual.quote.source"> · {{ currentScene.visual.quote.source }}</span>
+            </div>
+          </div>
+
+          <!-- timeline-marker: 时间线节点 -->
+          <div v-else-if="currentScene.visual.mode === 'timeline-marker'" class="scene-timeline">
+            <div class="timeline-dot"></div>
+            <div class="timeline-info">
+              <div class="timeline-year">{{ currentScene.visual.era?.year }}</div>
+              <div class="timeline-sub">{{ currentScene.visual.era?.subtitle }}</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 默认：纯文字 -->
+        <div v-else class="preview-scene-text" v-if="currentScene">
           {{ currentScene.text }}
         </div>
-        <div class="preview-scene-text placeholder" v-else>
+        <div class="preview-scene-text placeholder" v-if="!currentScene">
           点击下方播放按钮预览视频
         </div>
+      </div>
+
+      <!-- 底部 caption（visual.caption） -->
+      <div class="preview-caption" v-if="currentScene?.visual?.caption">
+        {{ currentScene.visual.caption }}
       </div>
 
       <!-- 字幕条 -->
@@ -452,6 +519,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
       <div class="preview-badge" v-if="currentScene">
         <NTag size="tiny" :bordered="false" type="info">
           段 {{ currentSegIndex >= 0 ? currentSegIndex + 1 : '?' }}
+          <template v-if="currentScene.visual?.mode">
+            · {{ currentScene.visual.mode }}
+          </template>
         </NTag>
       </div>
 
@@ -761,6 +831,141 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 .preview-scene-text.placeholder {
   font-size: 18px;
   color: rgba(255, 255, 255, 0.4);
+}
+
+/* ===== Phase E: 场景视觉样式 ===== */
+.scene-era-card {
+  text-align: center;
+}
+.scene-era-card .era-year {
+  font-size: 80px;
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  line-height: 1;
+}
+.scene-era-card .era-divider {
+  width: 160px;
+  height: 2px;
+  margin: 16px auto;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
+}
+.scene-era-card .era-subtitle {
+  font-size: 22px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.scene-versus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 60px;
+  width: 100%;
+}
+.scene-versus .versus-side {
+  font-size: 36px;
+  font-weight: 700;
+  color: rgba(150, 200, 255, 0.95);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  max-width: 35%;
+}
+.scene-versus .versus-side.warm {
+  color: rgba(255, 200, 150, 0.95);
+}
+.scene-versus .versus-center {
+  font-size: 24px;
+  font-weight: 300;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.scene-formula {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  padding: 32px 48px;
+  text-align: center;
+}
+.scene-formula .formula-title {
+  font-size: 32px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.scene-formula .formula-expr {
+  font-size: 18px;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  color: rgba(180, 220, 255, 0.9);
+  margin-top: 16px;
+}
+
+.scene-quote {
+  text-align: center;
+  position: relative;
+  max-width: 70%;
+}
+.scene-quote .quote-mark {
+  font-size: 80px;
+  font-family: Georgia, serif;
+  color: rgba(255, 255, 255, 0.12);
+  position: absolute;
+  top: -40px;
+  left: -30px;
+}
+.scene-quote .quote-text {
+  font-size: 26px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.95);
+  font-family: "PingFang SC", serif;
+  line-height: 1.6;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.scene-quote .quote-author {
+  font-size: 16px;
+  font-weight: 400;
+  color: rgba(200, 200, 200, 0.7);
+  margin-top: 20px;
+}
+
+.scene-timeline {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+.scene-timeline .timeline-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+}
+.scene-timeline .timeline-year {
+  font-size: 36px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.scene-timeline .timeline-sub {
+  font-size: 18px;
+  color: rgba(200, 200, 200, 0.8);
+  margin-top: 4px;
+}
+
+.preview-caption {
+  position: absolute;
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 10px 28px;
+  border-radius: 8px;
+  max-width: 70%;
+  text-align: center;
+  font-size: 16px;
+  color: #fff;
+  border-left: 3px solid rgba(255, 255, 255, 0.6);
 }
 
 .preview-subtitle {

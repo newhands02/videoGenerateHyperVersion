@@ -47,6 +47,37 @@ export interface ProjectMeta {
 // ==================== 脚本段 ====================
 
 /**
+ * 场景视觉描述（由 LLM 在分段时一并生成，驱动动画引擎渲染）
+ */
+export interface SceneVisual {
+  /** 视觉模式：决定整体排版 */
+  mode: 'era-card' | 'versus' | 'formula' | 'quote' | 'timeline-marker' | 'plain';
+
+  /** 主题色板（按情绪选） */
+  palette: 'indigo' | 'ember' | 'ocean' | 'forest' | 'violet' | 'amber';
+
+  /** era-card 模式：年代卡片（如 "1950 · 阿兰·图灵"） */
+  era?: { year: string; subtitle: string };
+
+  /** versus 模式：左右对照（如 "机器 vs 人类"） */
+  versus?: {
+    left: { label: string; tone: 'cool' | 'warm' };
+    right: { label: string; tone: 'cool' | 'warm' };
+    /** 中间连接词（如 "vs"、"对话"、"PK"） */
+    center?: string;
+  };
+
+  /** formula 模式：核心概念/关键词 */
+  formula?: { title: string; expression?: string };
+
+  /** quote 模式：引文来源 */
+  quote?: { author?: string; source?: string };
+
+  /** 底部 takeaway 一句话（15-25 字） */
+  caption?: string;
+}
+
+/**
  * 单段脚本
  */
 export interface ScriptSegment {
@@ -67,6 +98,8 @@ export interface ScriptSegment {
   audioDuration?: number;
   /** 音频 URL（blob: 或 path:） */
   audioUrl?: string;
+  /** 场景视觉描述（AI 分段时由 LLM 生成） */
+  visual?: SceneVisual;
 }
 
 export type SegmentRole =
@@ -224,6 +257,8 @@ export interface AISegmentProposal {
   confidence: number;
   suggestedVoice: 'female-warm' | 'male-deep' | 'female-bright' | 'male-young';
   notes: string;
+  /** 场景视觉描述（LLM 一并生成，驱动动画引擎渲染场景画面） */
+  visual: SceneVisual;
 }
 
 /**

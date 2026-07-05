@@ -253,6 +253,7 @@ export async function exportVideo(options: VideoExportOptions): Promise<VideoExp
           text: seg.text,
           seed,
           intensity,
+          visual: seg.visual,
           prevColors: i === 0 ? undefined : prevColors,
         };
 
@@ -278,8 +279,8 @@ export async function exportVideo(options: VideoExportOptions): Promise<VideoExp
 
     // 段间过渡（用动画引擎的过渡逻辑取代死黑屏）
     if (i < segments.length - 1) {
-      prevColors = getSceneGradient(seg.role);
-      const nextColors = getSceneGradient(segments[i + 1].role);
+      prevColors = getSceneGradient(seg.role, seg.visual);
+      const nextColors = getSceneGradient(segments[i + 1].role, segments[i + 1].visual);
       const transStart = performance.now();
       await new Promise<void>((resolve) => {
         const render = () => {
@@ -295,6 +296,7 @@ export async function exportVideo(options: VideoExportOptions): Promise<VideoExp
             text: '',
             seed: seedFor(i + 1, segments[i + 1].text),
             intensity,
+            visual: segments[i + 1].visual,
             transitionProgress: tp,
             prevColors,
           };
